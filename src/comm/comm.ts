@@ -1,10 +1,11 @@
 import * as zmq from "https://raw.githubusercontent.com/apowers313/deno-zeromq/master/mod.ts";
+import type { Kernel } from "../kernel.ts";
 
 export interface CommCfg {
   name: string;
   hostname: string;
   port: number;
-  // kernel: Kernel;
+  kernel: Kernel;
   type?: "pub" | "router";
 }
 
@@ -27,13 +28,15 @@ export class Comm {
   public readonly type: string;
   public readonly hostname: string;
   public readonly port: number;
+  protected kernel: Kernel;
   private handlers: Map<string, RecvFnType> = new Map();
 
-  constructor(cfg: CommCfg) {
+  constructor (cfg: CommCfg) {
     this.name = cfg.name;
     this.type = cfg.type ?? "router";
     this.hostname = cfg.hostname;
     this.port = cfg.port;
+    this.kernel = cfg.kernel;
   }
 
   public async init() {
@@ -43,10 +46,9 @@ export class Comm {
     await hbSock.bind(connStr);
     for await (const messages of hbSock) {
       console.log(
-        `'${this.name}' received: [${
-          messages.map((it) => new TextDecoder().decode(it as Uint8Array)).join(
-            ",",
-          )
+        `'${this.name}' received: [${messages.map((it) => new TextDecoder().decode(it as Uint8Array)).join(
+          ",",
+        )
         }]`,
       );
 
@@ -59,7 +61,7 @@ export class Comm {
     this.handlers.set(name, cb);
   }
 
-  public async send() {}
+  public async send() { }
 
   public async recv(msgs: Array<Uint8Array | string>) {
     // const delimiter = abToString(msgs[0]);
@@ -88,16 +90,17 @@ export class Comm {
     await cb(msg, ctx);
   }
 
-  public async shutdown() {}
+  public async shutdown() { }
 }
 
 export class ControlComm extends Comm {
-  constructor(ip: string, port: number) {
+  constructor (ip: string, port: number, kernel: Kernel) {
     super({
       name: "control",
       type: "router",
       hostname: ip,
       port: port,
+      kernel: kernel
     });
 
     this.setHandler("shutdown_request", this.shutdownHandler);
@@ -110,12 +113,13 @@ export class ControlComm extends Comm {
 }
 
 export class ShellComm extends Comm {
-  constructor(ip: string, port: number) {
+  constructor (ip: string, port: number, kernel: Kernel) {
     super({
       name: "shell",
       type: "router",
       hostname: ip,
       port: port,
+      kernel,
     });
 
     this.setHandler("kernel_info_request", this.kernelInfoHandler);
@@ -123,6 +127,24 @@ export class ShellComm extends Comm {
 
   async kernelInfoHandler(msg: Message, ctx: CommContext) {
     await console.log("kernelInfoHandler");
+    let response = {
+      protocol_version: this.kernel.metadata.protocolVersion,
+      implementation_version: this.kernel.metadata.kernelVersion,
+      implementation: this.kernel.metadata.implementationName,
+      language_info: {
+        name: this.kernel.metadata.language,
+        version: this.kernel.metadata.languageVersion,
+        mime: this.kernel.metadata.mime,
+        file_extension: this.kernel.metadata.fileExt,
+      },
+      help_links: {
+        text: this.kernel.metadata.helpText,
+        url: this.kernel.metadata.helpUrl,
+      },
+      banner: this.kernel.metadata.banner,
+      debugger: false,
+    };
+    return ctx.send(response);
   }
 }
 
