@@ -1,5 +1,6 @@
-import * as zmq from "https://raw.githubusercontent.com/apowers313/deno-zeromq/master/mod.ts";
-import { ShellComm, ControlComm, Comm } from "./comm/comm.ts";
+import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext } from "./comm/comm.ts";
+import { StatusMessage } from "./comm/message.ts";
+import { desc } from "./types.ts";
 
 export interface KernelCfg {
     connectionFile: string;
@@ -7,64 +8,131 @@ export interface KernelCfg {
 
 export interface ConnectionSpec {
     ip: string;
-    controlPort: number;
-    shellPort: number;
-    stdinPort: number;
-    hbPort: number;
-    iopubPort: number;
     transport: string;
-    signatureScheme: string;
+    // deno-lint-ignore camelcase
+    control_port: number;
+    // deno-lint-ignore camelcase
+    shell_port: number;
+    // deno-lint-ignore camelcase
+    stdin_port: number;
+    // deno-lint-ignore camelcase
+    hb_port: number;
+    // deno-lint-ignore camelcase
+    iopub_port: number;
+    // deno-lint-ignore camelcase
+    signature_scheme: string;
     key: string;
 }
 
+export interface KernelMetadata {
+    protocolVersion: string;
+    kernelVersion: string;
+    languageVersion: string;
+    language: string;
+    implementationName: string;
+    mime: string;
+    fileExt: string;
+    helpText: string;
+    helpUrl: string;
+    banner: string;
+    sessionId: string;
+}
+
+export interface HmacKey {
+    alg: "sha256",
+    key: string;
+}
+
+export type KernelState = "idle" | "busy";
+
 export class Kernel {
+    public metadata: KernelMetadata;
+    public hmacKey: HmacKey | null = null;
+    public state: KernelState = "idle";
     private connectionFile: string;
     private connectionSpec: ConnectionSpec | null = null;
-    connMap: Map<string, Comm> = new Map();
+    private commMap: Map<string, Comm> = new Map();
 
     constructor (cfg: KernelCfg) {
         console.log("constructing IDeno kernel...");
         // this.connMap = new Map();
         this.connectionFile = cfg.connectionFile;
+        this.metadata = {
+            protocolVersion: desc.protocolVersion,
+            kernelVersion: desc.kernelVersion,
+            languageVersion: desc.languageVersion,
+            implementationName: desc.implementationName,
+            language: desc.language,
+            mime: desc.mime,
+            fileExt: desc.fileExt,
+            helpText: desc.helpText,
+            helpUrl: desc.helpUrl,
+            banner: desc.banner,
+            sessionId: crypto.randomUUID(),
+        };
     }
 
     public async init() {
         console.info("initializing IDeno kernel...");
-        const promiseList = [];
 
         this.connectionSpec = await Kernel.parseConnectionFile(this.connectionFile);
+        this.hmacKey = {
+            key: this.connectionSpec.key,
+            alg: "sha256"
+        };
 
         // // create control (router)
-        const controlComm = new ControlComm(this.connectionSpec.ip, this.connectionSpec.controlPort);
-        promiseList.push(controlComm.init());
-        // promiseList.push(createReplySock("control", this.connectionSpec.ip, this.connectionSpec.control_port));
+        this.addComm(ControlComm, this.connectionSpec.control_port);
+        // const controlComm = new ControlComm(this.connectionSpec.ip, this.connectionSpec.control_port, this);
+        // promiseList.push(controlComm.init());
 
         // // create shell (router)
-        // promiseList.push(createReplySock("shell", this.connectionSpec.ip, this.connectionSpec.shellPort));
-        const shellComm = new ShellComm(this.connectionSpec.ip, this.connectionSpec.shellPort);
-        promiseList.push(shellComm.init());
+        this.addComm(ShellComm, this.connectionSpec.shell_port);
+        // const shellComm = new ShellComm(this.connectionSpec.ip, this.connectionSpec.shell_port, this);
+        // promiseList.push(shellComm.init());
 
         // // create stdin (router)
-        promiseList.push(createReplySock("stdin", this.connectionSpec.ip, this.connectionSpec.stdinPort));
+        this.addComm(StdinComm, this.connectionSpec.stdin_port);
+        // const stdinComm = new StdinComm(this.connectionSpec.ip, this.connectionSpec.stdin_port, this);
+        // promiseList.push(stdinComm.init());
 
-        // create heartbeat (router)
-        promiseList.push(createReplySock("hb", this.connectionSpec.ip, this.connectionSpec.hbPort));
+        // create heartbeat (dealer)
+        this.addComm(HbComm, this.connectionSpec.stdin_port);
+        // const hbComm = new HbComm(this.connectionSpec.ip, this.connectionSpec.hb_port, this);
+        // promiseList.push(hbComm.init());
 
-        await Promise.all(promiseList);
+        // create iopub (pub)
+        this.addComm(IOPubComm, this.connectionSpec.iopub_port);
+        // const ioPubComm = new IOPubComm(this.connectionSpec.ip, this.connectionSpec.iopub_port, this);
+        // promiseList.push(ioPubComm.init());
 
-        async function createReplySock(name: string, ip: string, port: number) {
-            const hbSock = zmq.Reply();
-            let connStr = `tcp://${ip}:${port}`;
-            console.log("connStr", connStr);
-            await hbSock.bind(connStr);
-            for await (const messages of hbSock) {
-                messages.forEach((m) => console.log("message", m.toString()));
-                console.log(
-                    `${name} Receive: [${messages.map((it) => new TextDecoder().decode(it as Uint8Array)).join(",")
-                    }]`,
-                );
-            }
-        }
+        await this.commInit();
+        // await Promise.all(promiseList);
+    }
+
+    private addComm(commClass: CommClass, port: number) {
+        if (!this.connectionSpec) throw new Error("internal error");
+
+        const comm: Comm = new commClass(this.connectionSpec.ip, port, this);
+        this.commMap.set(comm.name, comm);
+    }
+
+    private commInit(): Promise<void[]> {
+        return Promise.all([...this.commMap.values()].map((c) => c.init()));
+    }
+
+    public async setState(state: KernelState, ctx: CommContext) {
+        if (this.state === state) return;
+
+        console.log("SETTING KERNEL STATE:", state);
+        this.state = state;
+
+        // broadcast state change
+        const iopub = this.commMap.get("iopub");
+        if (!iopub) throw new Error("can't change state, iopub channel not initialized");
+
+        const m = new StatusMessage(ctx, { execution_state: state });
+        await iopub.send(m);
     }
 
     public restart() { }
@@ -85,8 +153,9 @@ export class Kernel {
             typeof connectionSpec.hb_port !== "number" ||
             typeof connectionSpec.iopub_port !== "number" ||
             typeof connectionSpec.transport !== "string" ||
+            typeof connectionSpec.key !== "string" ||
             typeof connectionSpec.signature_scheme !== "string" ||
-            typeof connectionSpec.key !== "string"
+            connectionSpec.signature_scheme !== "hmac-sha256"
         ) {
             throw new Error("malformed connection file: " + connectionSpec);
         }

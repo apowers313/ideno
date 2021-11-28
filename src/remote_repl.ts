@@ -1,5 +1,5 @@
 export class RemoteRepl {
-    constructor(opts) {
+    constructor () {
     }
 
     init() {
@@ -8,10 +8,10 @@ export class RemoteRepl {
         // run queue: async iterator
     }
 
-    shutdown() {}
+    shutdown() { }
 
     exec() {
-        function doExec(cmd:string) {
+        function doExec(cmd: string) {
             let filename = "./foo.ts";
             console.log("running:", cmd);
             const [f, err] = (Deno as any).core.evalContext(cmd, "<ideno>");
