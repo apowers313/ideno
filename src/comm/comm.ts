@@ -1,6 +1,6 @@
-import * as zmq from "https://raw.githubusercontent.com/apowers313/deno-zeromq/master/mod.ts";
+import { zmq } from "../../deps.ts";
 import type { Kernel } from "../kernel.ts";
-import { Message, KernelInfoReplyMessage, KernelInfoContent, StatusMessage } from "./message.ts";
+import { Message, KernelInfoReplyMessage, KernelInfoContent } from "./message.ts";
 
 export interface CommContext {
     msg: Message;
@@ -31,7 +31,6 @@ export class Comm {
     constructor (cfg: CommCfg) {
         this.name = cfg.name;
         this.type = cfg.type ?? "router";
-        console.log("!!!XXX name", this.name, "type", this.type);
         this.hostname = cfg.hostname;
         this.port = cfg.port;
         this.kernel = cfg.kernel;
@@ -41,7 +40,6 @@ export class Comm {
                 this.socket = zmq.Reply();
                 break;
             case "pub":
-                console.log("creating pub socket");
                 this.socket = zmq.Publish();
                 break;
             // case "reply":
@@ -59,7 +57,6 @@ export class Comm {
 
     public async init() {
         const connStr = `tcp://${this.hostname}:${this.port}`;
-        console.log(this.name, "connStr", connStr);
 
         switch (this.type) {
             case "router":
@@ -75,17 +72,8 @@ export class Comm {
     }
 
     private async pubInit(connStr: string) {
-        console.log("pubinit");
         const socket = (this.socket as zmq.Publisher);
-
-        console.log("pubinit binding to", connStr);
         await socket.bind(connStr);
-        console.log("pubinit entering loop");
-        while (true) {
-            console.log("!!!XXX pubinit sending!!!");
-            await socket.send("kitty cats", `meow!`);
-            await new Promise((resolve) => setTimeout(resolve, 500));
-        }
     }
 
     private async routerInit(connStr: string) {
@@ -116,7 +104,6 @@ export class Comm {
     // }
 
     public setHandler(name: string, cb: RecvFnType): void {
-        console.log("setting handler", name, cb);
         this.handlers.set(name, cb);
     }
 
@@ -143,7 +130,6 @@ export class Comm {
         await this.kernel.setState("busy", ctx);
 
         console.log("received message type", msg.type);
-        console.log("handlers", this.handlers);
         const cb = this.handlers.get(msg.type);
 
         if (!cb) {
@@ -250,12 +236,14 @@ export class IOPubComm extends Comm {
 
         const data: Array<zmq.MessageLike> = msg.serialize(this.kernel.hmacKey);
 
-        console.log("socket", this.socket);
-        const topic = `kernel.${this.kernel.metadata.sessionId}.${msg.type}`;
-        console.log("iopub topic", topic);
-        // console.log("connected", this.socket.transport?.connected());
-        const res = await this.socket.send(topic, ...data);
-        console.log("iopub send result:", res);
+        // XXX: first data frame is a empty string, representing our topic
+        // our zeromq library automatically filters frames that don't match a known topic
+        // but no topic is requested and Jupyter automatically passes through ALL topics
+        // (see: https://jupyter-client.readthedocs.io/en/latest/messaging.html#the-wire-protocol)
+        // 
+        // in the event that we change zeromq libraries, we might change our topic to something like this:
+        // const topic = `kernel.${this.kernel.metadata.sessionId}.${msg.type}`;
+        const res = await this.socket.send("", ...data);
         return res;
     }
 }
