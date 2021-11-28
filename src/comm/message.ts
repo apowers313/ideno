@@ -1,7 +1,8 @@
+import { hmac } from "../../deps.ts";
+
 import type { CommContext } from "./comm.ts";
 import type { HmacKey } from "../kernel.ts";
 import { desc } from "../types.ts";
-import { hmac } from "https://denopkg.com/chiefbiiko/hmac/mod.ts";
 
 export interface MessageHeader {
     // deno-lint-ignore camelcase
@@ -135,8 +136,8 @@ export class Message {
         const messages: Array<Uint8Array> = [];
         messages.push(stringToAb("<IDS|MSG>"));
         const hmac = this.calcHmac(hmacKey);
-        console.log("calculated HMAC:", hmac);
-        console.log("calculated HMAC buf:", stringToAb(hmac).toString());
+        // console.log("calculated HMAC:", hmac);
+        // console.log("calculated HMAC buf:", stringToAb(hmac).toString());
         messages.push(stringToAb(hmac));
         messages.push(stringToAb(JSON.stringify(this.header)));
         messages.push(stringToAb(JSON.stringify(this.parentHeader)));
