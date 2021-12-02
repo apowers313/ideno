@@ -1,7 +1,6 @@
 import { hmac } from "../../deps.ts";
 
-import type { CommContext } from "./comm.ts";
-import type { HmacKey } from "../kernel.ts";
+import { Comm, CommContext, HmacKey } from "./comm.ts";
 import { desc } from "../types.ts";
 
 export interface MessageHeader {
@@ -45,9 +44,9 @@ export type StdinMessageRequestType = "input_request";
 export type StdinMessageReplyType = "input_reply";
 
 // content
-export type MessageContent = KernelInfoContent | StatusContent;
+export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ShutdownContent;
 
-export type KernelInfoContent = {
+export interface KernelInfoContent {
     status: "ok",
     // deno-lint-ignore camelcase
     protocol_version: string,
@@ -69,6 +68,24 @@ export type KernelInfoContent = {
     }>,
     banner: string,
     debugger: boolean,
+}
+
+export interface CommInfoContent {
+    status: "ok",
+    comms: CommInfo | Record<never, never>;
+}
+
+export interface ShutdownContent {
+    status: "ok",
+    restart: boolean;
+}
+
+export type CommInfo = {
+    [key: string]: {
+        comm_id: {
+            target_name: string;
+        };
+    };
 };
 
 export type StatusContent = {
@@ -80,7 +97,7 @@ export interface MessageConfigInterface {
     type: MessageType;
     reply: boolean;
     content: MessageContent;
-    ctx?: CommContext;
+    sessionId: string;
 }
 
 export class Message {
@@ -92,22 +109,22 @@ export class Message {
     public content: MessageContent | Record<never, never>;
     // deno-lint-ignore no-explicit-any
     public buffers?: Array<any>;
-    public ctx: CommContext | null;
+    public readonly sessionId: string;
     public readonly type: MessageType;
     public readonly isReply: boolean;
 
     constructor (cfg: MessageConfigInterface) {
         this.isReply = cfg.reply;
         this.type = cfg.type;
-        this.ctx = cfg.ctx ?? null;
         this.header = this.buildHeader();
         this.parentHeader = {};
         this.metadata = {};
         this.content = cfg.content;
+        this.sessionId = cfg.sessionId;
     }
 
     protected buildHeader(): MessageHeader {
-        const session = this.ctx?.kernel.metadata.sessionId ?? crypto.randomUUID(); // TODO: new UUID
+        const session = this.sessionId;
 
         const ret: MessageHeader = {
             // deno-lint-ignore camelcase
@@ -121,14 +138,6 @@ export class Message {
         };
 
         return ret;
-    }
-
-    public addContext(ctx: CommContext) {
-        if (this.ctx) {
-            throw new Error("context already set");
-        }
-
-        this.ctx = ctx;
     }
 
     public serialize(hmacKey: HmacKey): Array<Uint8Array> {
@@ -147,12 +156,7 @@ export class Message {
             console.error("Jupyter message buffers not currently supported");
         }
 
-        console.log("sending header", this.header);
-        console.log("sending parentHeader", this.parentHeader);
-        console.log("sending metadata", this.metadata);
-        console.log("sending content", this.content);
-        console.log("sending messages:");
-        messages.forEach((m) => console.log("    message:", m.toString()));
+        Comm.printMessages("==> SENDING DATA", messages, this);
 
         return messages;
     }
@@ -175,10 +179,13 @@ export class Message {
         const metadata = JSON.parse(abToString(data[4]));
         const content = JSON.parse(abToString(data[5]));
 
+        console.warn("*** MSG DATA NOT VALIDATED ***");
+
         const m = new Message({
             type: header.msg_type,
             reply: false,
-            content: content,
+            content,
+            sessionId: "" // XXX: gets overriden below anyway...
         });
 
         m.delimiter = delimiter;
@@ -201,25 +208,33 @@ export class ReplyMessage extends Message {
     constructor (ctx: CommContext, type: MessageReplyType, content: MessageContent) {
         super({
             type,
-            ctx,
             content,
             reply: true,
+            sessionId: ctx.sessionId
         });
 
         this.parentHeader = ctx.msg.header;
-        // this.header = this.buildHeader();
     }
-
-    // buildHeader(): MessageReplyHeader {
-    //     const hdr = super.buildHeader();
-    //     // (hdr as MessageReplyHeader).status = "ok";
-    //     return (hdr as MessageReplyHeader);
-    // }
 }
 
 export class KernelInfoReplyMessage extends ReplyMessage {
     constructor (ctx: CommContext, content: KernelInfoContent) {
         super(ctx, "kernel_info_reply", content);
+    }
+}
+
+export class CommInfoReplyMessage extends ReplyMessage {
+    constructor (ctx: CommContext, content: CommInfoContent) {
+        super(ctx, "comm_info_reply", content);
+    }
+}
+
+export class ShutdownReplyMessage extends ReplyMessage {
+    constructor (ctx: CommContext) {
+        super(ctx, "shutdown_reply", {
+            status: "ok",
+            restart: (ctx.msg.content as ShutdownContent).restart,
+        });
     }
 }
 

@@ -1,39 +1,52 @@
 import { zmq } from "../../deps.ts";
-import type { Kernel } from "../kernel.ts";
-import { Message, KernelInfoReplyMessage, KernelInfoContent } from "./message.ts";
+import { Message } from "./message.ts";
+
+export type RecvFnType = (ctx: CommContext) => Promise<void>;
+export type RespFnType = (msg: Message) => Promise<void>;
+export type HandlerFn = RecvFnType;
 
 export interface CommContext {
     msg: Message;
-    kernel: Kernel;
     send: RespFnType;
+    hmacKey: HmacKey;
+    sessionId: string;
+}
+
+
+export interface HmacKey {
+    alg: "sha256",
+    key: string;
 }
 
 export interface CommCfg {
     name: string;
     hostname: string;
     port: number;
-    kernel: Kernel;
+    sessionId: string;
+    hmacKey: HmacKey;
+    handler: HandlerFn;
     type?: "pub" | "router" | "reply";
 }
-
-export type RecvFnType = (ctx: CommContext) => Promise<void>;
-export type RespFnType = (msg: Message) => Promise<void>;
 
 export class Comm {
     public readonly name: string;
     public readonly type: string;
     public readonly hostname: string;
     public readonly port: number;
-    protected kernel: Kernel;
+    public readonly sessionId: string;
     protected socket: zmq.Publisher | zmq.Replier;
-    private handlers: Map<string, RecvFnType> = new Map();
+    protected handler: HandlerFn;
+    protected hmacKey: HmacKey;
 
     constructor (cfg: CommCfg) {
         this.name = cfg.name;
         this.type = cfg.type ?? "router";
         this.hostname = cfg.hostname;
         this.port = cfg.port;
-        this.kernel = cfg.kernel;
+        this.sessionId = cfg.sessionId;
+        this.hmacKey = cfg.hmacKey;
+        this.handler = cfg.handler;
+
         switch (this.type) {
             case "reply":
             case "router":
@@ -103,138 +116,112 @@ export class Comm {
     //     await socket.connect(connStr);
     // }
 
-    public setHandler(name: string, cb: RecvFnType): void {
-        this.handlers.set(name, cb);
-    }
-
     public send(msg: Message): Promise<void> {
-        if (!this.kernel.hmacKey) throw new Error("initialize kernel first");
-
-        const data: Array<zmq.MessageLike> = msg.serialize(this.kernel.hmacKey);
+        const data: Array<zmq.MessageLike> = msg.serialize(this.hmacKey);
 
         return this.socket.send(...data);
     }
 
     public async recv(data: Array<Uint8Array>) {
-        if (!this.kernel.hmacKey) {
-            throw new Error("kernel not initialized");
-        }
+        const msg = Message.from(data, this.hmacKey);
+        Comm.printMessages(`<== RECEIVED DATA: ${msg.type}`, data, msg);
 
-
-        const msg = Message.from(data, this.kernel.hmacKey);
         const ctx: CommContext = {
             msg,
-            kernel: this.kernel,
+            hmacKey: this.hmacKey,
             send: this.send.bind(this),
+            sessionId: this.sessionId,
         };
-        await this.kernel.setState("busy", ctx);
 
-        console.log("received message type", msg.type);
-        const cb = this.handlers.get(msg.type);
-
-        if (!cb) {
-            throw new Error(`handler not found for type: ${msg.type}`);
-        }
-
-        await cb(ctx);
-
-        await this.kernel.setState("idle", ctx);
+        await this.handler(ctx);
     }
 
     public async shutdown() { }
+
+    static printMessages(header: string, data: Array<Uint8Array>, msg: Message) {
+        // encoded
+        console.log("//", header);
+        console.log("export const msg:Array<Uint8Array> = [");
+        data.forEach((d) => {
+            console.log(`    Uint8Array.from([${d.toString()}]),`);
+        });
+        console.log("];");
+
+        // plain text
+        console.log("// DECODED DATA:");
+        console.log("header:", msg.header);
+        console.log("parent_header:", msg.parentHeader);
+        console.log("metadata:", msg.metadata);
+        console.log("content:", msg.content);
+        console.log("buffers:", msg.buffers);
+    }
+}
+
+interface CommSubclassConfig {
+    ip: string;
+    port: number;
+    sessionId: string;
+    hmacKey: HmacKey;
+    handler: HandlerFn;
 }
 
 export class ControlComm extends Comm {
-    constructor (ip: string, port: number, kernel: Kernel) {
+    constructor (cfg: CommSubclassConfig) {
         super({
             name: "control",
             type: "router",
-            hostname: ip,
-            port: port,
-            kernel: kernel
+            hostname: cfg.ip,
+            hmacKey: cfg.hmacKey,
+            port: cfg.port,
+            sessionId: cfg.sessionId,
+            handler: cfg.handler,
         });
-
-        this.setHandler("shutdown_request", this.shutdownHandler);
-    }
-
-    // deno-lint-ignore no-unused-vars
-    async shutdownHandler(ctx: CommContext) {
-        await console.log("shutdownHandler");
     }
 }
 
 export class ShellComm extends Comm {
-    constructor (ip: string, port: number, kernel: Kernel) {
+    constructor (cfg: CommSubclassConfig) {
         super({
             name: "shell",
             type: "router",
-            hostname: ip,
-            port: port,
-            kernel,
+            hostname: cfg.ip,
+            hmacKey: cfg.hmacKey,
+            port: cfg.port,
+            sessionId: cfg.sessionId,
+            handler: cfg.handler,
         });
-
-        this.setHandler("kernel_info_request", this.kernelInfoHandler.bind(this));
-    }
-
-    async kernelInfoHandler(ctx: CommContext) {
-        console.log("kernelInfoHandler");
-
-        const response: KernelInfoContent = {
-            status: "ok",
-            // deno-lint-ignore camelcase
-            protocol_version: this.kernel.metadata.protocolVersion,
-            // deno-lint-ignore camelcase
-            implementation_version: this.kernel.metadata.kernelVersion,
-            implementation: this.kernel.metadata.implementationName,
-            // deno-lint-ignore camelcase
-            language_info: {
-                name: this.kernel.metadata.language,
-                version: this.kernel.metadata.languageVersion,
-                mime: this.kernel.metadata.mime,
-                file_extension: this.kernel.metadata.fileExt,
-            },
-            // deno-lint-ignore camelcase
-            help_links: [{
-                text: this.kernel.metadata.helpText,
-                url: this.kernel.metadata.helpUrl,
-            }],
-            banner: this.kernel.metadata.banner,
-            debugger: false,
-        };
-
-        return await ctx.send(new KernelInfoReplyMessage(ctx, response));
     }
 }
 
 export class StdinComm extends Comm {
-    constructor (ip: string, port: number, kernel: Kernel) {
+    constructor (cfg: CommSubclassConfig) {
         super({
             name: "stdin",
             type: "reply",
-            hostname: ip,
-            port: port,
-            kernel: kernel
+            hostname: cfg.ip,
+            hmacKey: cfg.hmacKey,
+            port: cfg.port,
+            sessionId: cfg.sessionId,
+            handler: cfg.handler,
         });
     }
 }
 
 export class IOPubComm extends Comm {
-    constructor (ip: string, port: number, kernel: Kernel) {
+    constructor (cfg: CommSubclassConfig) {
         super({
             name: "iopub",
             type: "pub",
-            hostname: ip,
-            port: port,
-            kernel: kernel
+            hostname: cfg.ip,
+            hmacKey: cfg.hmacKey,
+            port: cfg.port,
+            sessionId: cfg.sessionId,
+            handler: cfg.handler,
         });
     }
 
     public async send(msg: Message): Promise<void> {
-        if (!this.kernel.hmacKey) {
-            throw new Error("initialize kernel first");
-        }
-
-        const data: Array<zmq.MessageLike> = msg.serialize(this.kernel.hmacKey);
+        const data: Array<zmq.MessageLike> = msg.serialize(this.hmacKey);
 
         // XXX: first data frame is a empty string, representing our topic
         // our zeromq library automatically filters frames that don't match a known topic
@@ -249,17 +236,19 @@ export class IOPubComm extends Comm {
 }
 
 export class HbComm extends Comm {
-    constructor (ip: string, port: number, kernel: Kernel) {
+    constructor (cfg: CommSubclassConfig) {
         super({
             name: "hb",
             type: "router",
-            hostname: ip,
-            port: port,
-            kernel: kernel
+            hostname: cfg.ip,
+            hmacKey: cfg.hmacKey,
+            port: cfg.port,
+            sessionId: cfg.sessionId,
+            handler: cfg.handler,
         });
     }
 }
 
 export interface CommClass {
-    new(ip: string, port: number, kernel: Kernel): Comm;
+    new(cfg: CommSubclassConfig): Comm;
 }

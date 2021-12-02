@@ -1,5 +1,5 @@
-import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext } from "./comm/comm.ts";
-import { StatusMessage } from "./comm/message.ts";
+import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext, HmacKey, HandlerFn } from "./comm/comm.ts";
+import { StatusMessage, KernelInfoReplyMessage, KernelInfoContent, CommInfoContent, CommInfoReplyMessage, ShutdownReplyMessage } from "./comm/message.ts";
 import { desc } from "./types.ts";
 
 export interface KernelCfg {
@@ -36,11 +36,6 @@ export interface KernelMetadata {
     helpUrl: string;
     banner: string;
     sessionId: string;
-}
-
-export interface HmacKey {
-    alg: "sha256",
-    key: string;
 }
 
 export type KernelState = "idle" | "busy";
@@ -81,44 +76,86 @@ export class Kernel {
             alg: "sha256"
         };
 
-        // // create control (router)
-        this.addComm(ControlComm, this.connectionSpec.control_port);
-        // const controlComm = new ControlComm(this.connectionSpec.ip, this.connectionSpec.control_port, this);
-        // promiseList.push(controlComm.init());
-
-        // // create shell (router)
-        this.addComm(ShellComm, this.connectionSpec.shell_port);
-        // const shellComm = new ShellComm(this.connectionSpec.ip, this.connectionSpec.shell_port, this);
-        // promiseList.push(shellComm.init());
-
-        // // create stdin (router)
-        this.addComm(StdinComm, this.connectionSpec.stdin_port);
-        // const stdinComm = new StdinComm(this.connectionSpec.ip, this.connectionSpec.stdin_port, this);
-        // promiseList.push(stdinComm.init());
-
-        // create heartbeat (dealer)
-        this.addComm(HbComm, this.connectionSpec.stdin_port);
-        // const hbComm = new HbComm(this.connectionSpec.ip, this.connectionSpec.hb_port, this);
-        // promiseList.push(hbComm.init());
-
-        // create iopub (pub)
-        this.addComm(IOPubComm, this.connectionSpec.iopub_port);
-        // const ioPubComm = new IOPubComm(this.connectionSpec.ip, this.connectionSpec.iopub_port, this);
-        // promiseList.push(ioPubComm.init());
+        this.addComm(ShellComm, this.connectionSpec.shell_port, this.shellHandler.bind(this));
+        this.addComm(ControlComm, this.connectionSpec.control_port, this.controlHandler.bind(this));
+        this.addComm(StdinComm, this.connectionSpec.stdin_port, this.stdinHandler.bind(this));
+        this.addComm(HbComm, this.connectionSpec.hb_port, this.heartbeatHandler.bind(this));
+        this.addComm(IOPubComm, this.connectionSpec.iopub_port, this.iopubHandler.bind(this));
 
         await this.commInit();
         // await Promise.all(promiseList);
     }
 
-    private addComm(commClass: CommClass, port: number) {
+    private addComm(commClass: CommClass, port: number, handler: HandlerFn) {
         if (!this.connectionSpec) throw new Error("internal error");
+        if (!this.hmacKey) throw new Error("initialize kernal before addComm");
 
-        const comm: Comm = new commClass(this.connectionSpec.ip, port, this);
+        const comm: Comm = new commClass({
+            ip: this.connectionSpec.ip,
+            hmacKey: this.hmacKey,
+            sessionId: this.metadata.sessionId,
+            port,
+            handler
+        });
         this.commMap.set(comm.name, comm);
     }
 
     private commInit(): Promise<void[]> {
         return Promise.all([...this.commMap.values()].map((c) => c.init()));
+    }
+
+    public async shellHandler(ctx: CommContext) {
+        await this.setState("busy", ctx);
+
+        let m;
+        switch (ctx.msg.type) {
+            case "kernel_info_request":
+                m = new KernelInfoReplyMessage(ctx, this.getKernelInfo());
+                break;
+            case "comm_info_request":
+                m = new CommInfoReplyMessage(ctx, this.getCommInfo());
+                break;
+            default:
+                throw new Error("unknown message type: " + ctx.msg.type);
+        }
+
+        await ctx.send(m);
+
+        await this.setState("idle", ctx);
+    }
+
+    public async controlHandler(ctx: CommContext) {
+        await this.setState("busy", ctx);
+
+        // deno-lint-ignore no-unused-vars
+        let m;
+        switch (ctx.msg.type) {
+            case "shutdown_request":
+                await ctx.send(new ShutdownReplyMessage(ctx));
+                this.shutdown(0);
+                break;
+            default:
+                throw new Error("unknown message type: " + ctx.msg.type);
+        }
+
+        // await ctx.send(m);
+
+        await this.setState("idle", ctx);
+    }
+
+    // deno-lint-ignore no-unused-vars require-await
+    public async stdinHandler(ctx: CommContext) {
+        console.log("stdin msg received");
+    }
+
+    // deno-lint-ignore no-unused-vars require-await
+    public async heartbeatHandler(ctx: CommContext) {
+        console.log("heartbeat msg received");
+    }
+
+    // deno-lint-ignore no-unused-vars require-await
+    public async iopubHandler(ctx: CommContext) {
+        console.log("iopub msg received");
     }
 
     public async setState(state: KernelState, ctx: CommContext) {
@@ -137,7 +174,9 @@ export class Kernel {
 
     public restart() { }
 
-    public shutdown() { }
+    public shutdown(status: number) {
+        Deno.exit(status);
+    }
 
     public static async parseConnectionFile(filename: string): Promise<ConnectionSpec> {
         // parse connection file
@@ -161,5 +200,33 @@ export class Kernel {
         }
 
         return connectionSpec;
+    }
+
+    public getKernelInfo(): KernelInfoContent {
+        return {
+            status: "ok",
+            protocol_version: this.metadata.protocolVersion,
+            implementation_version: this.metadata.kernelVersion,
+            implementation: this.metadata.implementationName,
+            language_info: {
+                name: this.metadata.language,
+                version: this.metadata.languageVersion,
+                mime: this.metadata.mime,
+                file_extension: this.metadata.fileExt,
+            },
+            help_links: [{
+                text: this.metadata.helpText,
+                url: this.metadata.helpUrl,
+            }],
+            banner: this.metadata.banner,
+            debugger: false,
+        };
+    }
+
+    public getCommInfo(): CommInfoContent {
+        return {
+            status: "ok",
+            comms: {}
+        };
     }
 }
