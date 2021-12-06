@@ -30,5 +30,6 @@ async function doExec(rr: RemoteRepl) {
     console.log("exec wait done");
     await rr.exec(`console.log("hi bob");`);
     console.log("first exec done");
-    await rr.exec(`let x = 3;`);
+    await rr.exec(`let x = 3;\nx;`);
+    await rr.exec(`console.log("x is", x);`);
 }

@@ -4,7 +4,7 @@ import { IpcComm, IpcMessageType } from "./ipc.ts";
 export type StderrHandler = StdioPumpHandler;
 export type StdoutHandler = StdioPumpHandler;
 
-export type HandshakeFn = (value: unknown) => void;
+export type HandshakeFn = (value: void | PromiseLike<void>) => void;
 
 export interface RemoteReplConfig {
     stdoutHandler: StdioPumpHandler,
@@ -18,6 +18,7 @@ export class RemoteRepl {
     stderrHandler: StdioPumpHandler;
     ipc: IpcComm;
     handshakeCb: HandshakeFn | null = null;
+    childRunningPromise: Promise<void> | null = null;
 
     constructor (cfg: RemoteReplConfig) {
         this.stdoutHandler = cfg.stdoutHandler;
@@ -74,7 +75,7 @@ export class RemoteRepl {
 
     async exec(code: string) {
         console.log("waiting for child");
-        // await this.childRunning();
+        await this.childRunning();
         console.log("sending code:", code);
         await this.ipc.send({ type: "exec", code });
     }
@@ -115,14 +116,16 @@ export class RemoteRepl {
         }
 
         console.log("do handshake");
-        this.handshakeCb(null);
+        this.handshakeCb();
         this.handshakeCb = null;
     }
 
-    childRunning() {
-        return new Promise((resolve) => {
+    childRunning(): Promise<void> {
+        if (this.childRunningPromise) return this.childRunningPromise;
+        this.childRunningPromise = new Promise((resolve) => {
             this.handshakeCb = resolve;
         });
+        return this.childRunningPromise;
     }
 
     // history

@@ -68,8 +68,8 @@ export class ExecTask extends Task<TaskArgs, any> {
 
 function _execCode(code: string) {
     // deno-lint-ignore no-explicit-any
-    const [f, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
-    console.log("f", f);
+    const [res, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
+    console.log("res", res);
     console.log("err", err);
 }
 
