@@ -1,32 +1,10 @@
-import { Task, TaskQueue } from "./queue.ts";
 import { StdioPump, StdioPumpHandler } from "./stdio.ts";
-import { IpcComm } from "./ipc.ts";
+import { IpcComm, IpcMessageType } from "./ipc.ts";
 
 export type StderrHandler = StdioPumpHandler;
 export type StdoutHandler = StdioPumpHandler;
-export type TaskArgs = Array<string>;
-export interface ExecTaskOpts {
-    code: string;
-}
 
-// deno-lint-ignore no-explicit-any
-export class ExecTask extends Task<TaskArgs, any> {
-    private code: string;
-
-    constructor (opts: ExecTaskOpts) {
-        super(_execCode, opts.code);
-
-        this.code = opts.code;
-    }
-
-}
-
-function _execCode(code: string) {
-    // deno-lint-ignore no-explicit-any
-    const [f, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
-    console.log("f", f);
-    console.log("err", err);
-}
+export type HandshakeFn = (value: unknown) => void;
 
 export interface RemoteReplConfig {
     stdoutHandler: StdioPumpHandler,
@@ -35,13 +13,13 @@ export interface RemoteReplConfig {
 
 export class RemoteRepl {
     private child: Deno.Process | null = null;
-    private taskQueue: TaskQueue<ExecTask>;
+    childDone: Promise<Deno.ProcessStatus> | null = null;
     stdoutHandler: StdioPumpHandler;
     stderrHandler: StdioPumpHandler;
     ipc: IpcComm;
+    handshakeCb: HandshakeFn | null = null;
 
     constructor (cfg: RemoteReplConfig) {
-        this.taskQueue = new TaskQueue();
         this.stdoutHandler = cfg.stdoutHandler;
         this.stderrHandler = cfg.stderrHandler;
         this.ipc = new IpcComm({
@@ -51,6 +29,7 @@ export class RemoteRepl {
 
     async init() {
         await this.ipc.init();
+        console.log("PARENT IPC init done.");
 
         await this.#forkChild();
         if (!this.child //||
@@ -60,29 +39,28 @@ export class RemoteRepl {
             throw new Error("error spawning child process");
         }
 
-        await delay(3000);
-
-        // const stderrPump = new StdioPump({
-        //     stdio: this.child.stdout,
-        //     handler: this.stdoutHandler
-        // });
-
-        // const stdoutPump = new StdioPump({
-        //     stdio: this.child.stderr,
-        //     handler: this.stderrHandler
-        // });
-
         await Promise.all([
             // spawn
-            this.child.status(),
+            this.childDone,
+
             // run queue: async iterator
             // this.taskQueue.run(),
+
             // stdout, stderr
-            // stdoutPump.run(),
-            // stderrPump.run(),
+            // this.startStdioPump(this.child.stdout, this.stdoutHandler),
+            // this.startStdioPump(this.child.stderr, this.stderrHandler),
+
             // ipc
             this.ipc.run(),
         ]);
+
+    }
+
+    async startStdioPump(stdio: Deno.Reader, handler: StdioPumpHandler) {
+        await this.childRunning();
+
+        const pump = new StdioPump({ stdio, handler });
+        await pump.run();
     }
 
     shutdown() {
@@ -94,36 +72,57 @@ export class RemoteRepl {
         // ???
     }
 
-    exec(code: string) {
+    async exec(code: string) {
+        console.log("waiting for child");
+        // await this.childRunning();
         console.log("sending code:", code);
-        this.ipc.send(`EXEC: ${code}`);
+        await this.ipc.send({ type: "exec", code });
     }
 
     #forkChild() {
-        if (!this.ipc.sendPath || !this.ipc.recvPath) {
-            throw new Error("call ipc.init() before #forkChild()");
-        }
-
-        console.log("this.ipc.sendPath", this.ipc.sendPath);
-        console.log("this.ipc.recvPath", this.ipc.recvPath);
-        console.log("import.meta", import.meta);
         const childPath = import.meta.url.substring(0, import.meta.url.lastIndexOf('/')) + "/child.ts";
         console.log("childPath", childPath);
         this.child = Deno.run({
             cmd: `deno run --allow-all --unstable ${childPath}`.split(" "),
             env: {
-                TO_CHILD_COMM_PATH: this.ipc.sendPath,
-                TO_PARNET_COMM_PATH: this.ipc.recvPath,
+                PARENT_IPC_PORT: this.ipc.port.toString(),
             },
             // stdout: "piped",
             // stderr: "piped",
         });
+        console.log("running...");
+        this.childDone = this.child.status();
 
         return this.child;
     }
 
-    async recvIpc(msg: string) {
+    async recvIpc(msg: Record<string, unknown>) {
         await console.log("parent got message:", msg);
+        switch (msg.type) {
+            case "handshake":
+                this.doHandshake();
+                break;
+            case "exec_reply":
+                throw new Error("exec_reply not implemented yet");
+            default:
+                throw new Error(`unknown message: ${msg}`);
+        }
+    }
+
+    doHandshake() {
+        if (!this.handshakeCb) {
+            throw new Error("init() before doHandshake() or multiple handshakes received");
+        }
+
+        console.log("do handshake");
+        this.handshakeCb(null);
+        this.handshakeCb = null;
+    }
+
+    childRunning() {
+        return new Promise((resolve) => {
+            this.handshakeCb = resolve;
+        });
     }
 
     // history

@@ -9,6 +9,7 @@ Deno.test("shell does exec", async () => {
         stderrHandler: stdioCb,
     });
 
+    console.log("doing init..");
     await Promise.all([
         rr.init(),
         doExec(rr)
@@ -17,15 +18,17 @@ Deno.test("shell does exec", async () => {
     await rr.shutdown();
 });
 
-function delay(ms: number) {
-    return new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
-}
+// function delay(ms: number) {
+//     return new Promise((resolve) => {
+//         setTimeout(resolve, ms);
+//     });
+// }
 
 async function doExec(rr: RemoteRepl) {
     console.log("exec");
-    await delay(5000);
+    // await delay(5000);
     console.log("exec wait done");
-    rr.exec(`console.log("hi there");`);
-};
+    await rr.exec(`console.log("hi bob");`);
+    console.log("first exec done");
+    await rr.exec(`let x = 3;`);
+}

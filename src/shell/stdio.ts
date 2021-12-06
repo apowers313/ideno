@@ -1,4 +1,4 @@
-import { BufReader, writeAll } from "https://deno.land/std@0.117.0/io/mod.ts";
+import { BufReader } from "https://deno.land/std@0.117.0/io/mod.ts";
 
 export type StdioPumpHandler = (buf: Uint8Array, sz: number) => Promise<void>;
 

@@ -1,72 +1,100 @@
-export type IpcHandlerType = (msg: string) => Promise<void>;
+import { readLines } from "../../deps.ts";
+
+export type IpcHandlerType = (msg: Record<string, unknown>) => Promise<void>;
 
 export interface IpcCommConfig {
     recvHandler: IpcHandlerType;
-    sendPath?: string;
-    recvPath?: string;
+    port?: number;
+    ipAddr?: string;
 }
+
+export type IpcMessageType = IpcExecRequestMessageType | IpcExecReplyMessageType | IpcHandshakeMessageType;
+export type IpcExecRequestMessageType = {
+    type: "exec_request";
+    code: string;
+};
+
+export type IpcExecReplyMessageType = {
+    type: "exec_reply";
+    // deno-lint-ignore no-explicit-any
+    result: any;
+};
+
+export type IpcHandshakeMessageType = {
+    type: "handshake";
+};
 
 export class IpcComm {
     recvHandler: IpcHandlerType;
-    sendPath: string | undefined;
-    recvPath: string | undefined;
-    sendSock: Deno.DatagramConn | undefined;
-    recvSock: Deno.DatagramConn | undefined;
+    listeningSocket: Deno.Listener | undefined;
+    socket: Deno.Conn | undefined;
+    port = 0;
+    ipAddr = "127.0.0.1";
+    isServer = false;
 
     constructor (cfg: IpcCommConfig) {
         this.recvHandler = cfg.recvHandler;
-        this.sendPath = cfg.sendPath;
-        this.recvPath = cfg.recvPath;
+        this.port = cfg.port ?? this.port;
+        this.ipAddr = cfg.ipAddr ?? this.ipAddr;
     }
 
     async init() {
-        this.sendPath = this.sendPath ?? await Deno.makeTempFile();
-        this.recvPath = this.recvPath ?? await Deno.makeTempFile();
-
-        console.log("INIT: LISTENING ON:", this.recvPath);
-        this.recvSock = Deno.listenDatagram({
-            transport: "unixpacket",
-            path: this.recvPath
-        });
-
-        console.log("INIT: SENDING ON:", this.sendPath);
-        this.sendSock = Deno.listenDatagram({
-            transport: "unixpacket",
-            path: this.sendPath
-        });
+        if (!this.port) {
+            console.log("creating server socket...");
+            this.isServer = true;
+            this.listeningSocket = Deno.listen({
+                transport: "tcp",
+                hostname: this.ipAddr,
+                port: this.port
+            });
+            this.port = (this.listeningSocket.addr as Deno.NetAddr).port;
+        } else {
+            this.isServer = false;
+            this.socket = await Deno.connect({
+                transport: "tcp",
+                hostname: this.ipAddr,
+                port: this.port
+            });
+        }
     }
 
     shutdown() {
-        if (!this.sendSock || !this.recvSock) {
+        if (!this.socket) {
             throw new Error("call init() before shutdown()");
         }
 
-        this.sendSock.close();
-        this.recvSock.close();
+        this.socket.close();
     }
 
     async run() {
-        if (!this.recvSock) {
+        if (this.isServer) {
+            if (!this.listeningSocket) throw new Error("call init() before run() for server");
+            if (this.socket) throw new Error("run() called multiple times");
+            // accept just one connection
+            console.log("waiting for client to connect..");
+            this.socket = await this.listeningSocket.accept();
+        }
+
+        if (!this.socket) {
             throw new Error("call init() before run()");
         }
 
-        for await (const pkt of this.recvSock) {
-            const msg = new TextDecoder().decode(pkt[0]);
+        for await (const msg of readLines(this.socket)) {
+            // const msg = new TextDecoder().decode(pkt);
             console.log("IPC RECV:", msg);
-            await this.recvHandler(msg);
+            const ret: Record<string, unknown> = JSON.parse(msg);
+            await this.recvHandler(ret);
         }
+        throw new Error("IPC run done");
     }
 
-    async send(data: string) {
-        if (!this.sendPath || !this.sendSock) {
+    async send(data: Record<string, unknown>) {
+        if (!this.socket) {
             throw new Error("call init() before send()");
         }
 
+        const msg = JSON.stringify(data) + "\n";
         console.log("IPC SEND:", data);
-        console.log("SENDING ON:", this.sendPath);
-        await this.sendSock.send(
-            new TextEncoder().encode(data),
-            { transport: "unixpacket", path: this.sendPath }
-        );
+        await this.socket.write(new TextEncoder().encode(msg));
     }
 }
