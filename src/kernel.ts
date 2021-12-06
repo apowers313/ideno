@@ -55,7 +55,7 @@ export class Kernel {
         this.metadata = {
             protocolVersion: desc.protocolVersion,
             kernelVersion: desc.kernelVersion,
-            languageVersion: desc.languageVersion,
+            languageVersion: Deno.version.deno,
             implementationName: desc.implementationName,
             language: desc.language,
             mime: desc.mime,

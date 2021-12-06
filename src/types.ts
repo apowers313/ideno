@@ -1,7 +1,6 @@
 export enum desc {
     kernelVersion = "0.0.1",
     protocolVersion = "5.3",
-    languageVersion = "1.15.3",
     implementationName = "ideno",
     language = "typescript",
     mime = "text/x.typescript",
