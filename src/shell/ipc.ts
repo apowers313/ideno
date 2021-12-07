@@ -1,28 +1,103 @@
 import { readLines } from "../../deps.ts";
 
-export type IpcHandlerType = (msg: Record<string, unknown>) => Promise<void>;
+export type RawIpcMessageInterface = string;
+export type IpcMessageInterface = (ExecMsg | ExecResultMsg | ChildReadyMsg);
+export type IpcHandlerType = (msg: IpcMessage) => Promise<void>;
+
+export class IpcMessage {
+    data: IpcMessageInterface;
+    type: string;
+
+    constructor (value: RawIpcMessageInterface | IpcMessageInterface) {
+        let data: IpcMessageInterface;
+        if (typeof value === "string") {
+            data = this.parse(value);
+        } else {
+            data = value;
+        }
+
+        this.data = data;
+        if (!data.type) {
+            throw new Error("IpcMessage type not specified");
+        }
+        this.type = data.type;
+    }
+
+    serialize(): string {
+        return JSON.stringify(this.data) + "\n";
+    }
+
+    parse(str: string): IpcMessageInterface {
+        const data = JSON.parse(str);
+        this.validate(data);
+        return data;
+    }
+
+    validate(_data: unknown): _data is IpcMessageInterface {
+        return true;
+    }
+}
+
+export interface ExecMsg {
+    type?: "exec",
+    code: string,
+    history: boolean,
+}
+
+export class IpcExecMessage extends IpcMessage {
+    declare data: ExecMsg;
+
+    constructor (data: ExecMsg | RawIpcMessageInterface) {
+        if (typeof data === "object") data.type = "exec";
+        super(data);
+    }
+
+    validate(data: ExecMsg): data is ExecMsg {
+        if (data.type !== "exec" ||
+            typeof data.code !== "string" ||
+            typeof data.history !== "boolean") {
+            throw new Error("malformed exec request");
+        }
+
+        return true;
+    }
+}
+
+export interface ExecResultMsg {
+    type?: "exec_result",
+    status: "ok" | "error" | "abort",
+}
+
+export class IpcExecResultMessage extends IpcMessage {
+    constructor (data: ExecResultMsg | RawIpcMessageInterface) {
+        if (typeof data === "object") data.type = "exec_result";
+        super(data);
+    }
+}
+
+export interface ChildReadyMsg {
+    type: string,
+    ready: boolean;
+}
+
+export class IpcChildReadyMessage extends IpcMessage {
+    constructor (msg?: string) {
+        let data;
+        if (!msg) {
+            data = { type: "ready", ready: true };
+        } else {
+            data = msg;
+        }
+
+        super(data);
+    }
+}
 
 export interface IpcCommConfig {
     recvHandler: IpcHandlerType;
     port?: number;
     ipAddr?: string;
 }
-
-export type IpcMessageType = IpcExecRequestMessageType | IpcExecReplyMessageType | IpcHandshakeMessageType;
-export type IpcExecRequestMessageType = {
-    type: "exec_request";
-    code: string;
-};
-
-export type IpcExecReplyMessageType = {
-    type: "exec_reply";
-    // deno-lint-ignore no-explicit-any
-    result: any;
-};
-
-export type IpcHandshakeMessageType = {
-    type: "handshake";
-};
 
 export class IpcComm {
     recvHandler: IpcHandlerType;
@@ -82,19 +157,19 @@ export class IpcComm {
         for await (const msg of readLines(this.socket)) {
             // const msg = new TextDecoder().decode(pkt);
             console.log("IPC RECV:", msg);
-            const ret: Record<string, unknown> = JSON.parse(msg);
+            const ret = new IpcMessage(msg);
             await this.recvHandler(ret);
         }
         throw new Error("IPC run done");
     }
 
-    async send(data: Record<string, unknown>) {
+    async send(msg: IpcMessage) {
         if (!this.socket) {
             throw new Error("call init() before send()");
         }
 
-        const msg = JSON.stringify(data) + "\n";
+        const data = msg.serialize();
         console.log("IPC SEND:", data);
-        await this.socket.write(new TextEncoder().encode(msg));
+        await this.socket.write(new TextEncoder().encode(data));
     }
 }

@@ -1,5 +1,4 @@
-import { IpcComm, IpcHandshakeMessageType } from "./ipc.ts";
-import { Task, TaskQueue } from "./queue.ts";
+import { IpcComm, IpcMessage, IpcChildReadyMessage, IpcExecMessage } from "./ipc.ts";
 
 console.log("hello from child");
 
@@ -9,10 +8,8 @@ interface ChildConfig {
 
 class Child {
     ipc: IpcComm;
-    private taskQueue: TaskQueue<ExecTask>;
 
     constructor (cfg: ChildConfig) {
-        this.taskQueue = new TaskQueue();
 
         this.ipc = new IpcComm({
             recvHandler: this.recvHandler.bind(this),
@@ -27,50 +24,37 @@ class Child {
     }
 
     async run() {
-        const handshakeMsg: IpcHandshakeMessageType = { type: "handshake" };
-
         console.log("child running...");
         await Promise.all([
             this.ipc.run(),
-            this.ipc.send(handshakeMsg),
-            this.taskQueue.run(),
+            this.ipc.send(new IpcChildReadyMessage()),
         ]);
         console.log("child done running.");
     }
 
-    // deno-lint-ignore require-await
-    async recvHandler(msg: Record<string, unknown>) {
+    async recvHandler(msg: IpcMessage) {
         console.log("child got msg", msg);
         switch (msg.type) {
             case "exec":
-                this.taskQueue.addTask(new ExecTask({ code: (msg.code as string) }));
+                await this.runCode((msg as IpcExecMessage).data.code);
                 break;
             default:
                 throw new Error(`unknown msg type ${msg}`);
         }
     }
-}
 
-export type TaskArgs = Array<string>;
-export interface ExecTaskOpts {
-    code: string;
-}
-
-// deno-lint-ignore no-explicit-any
-export class ExecTask extends Task<TaskArgs, any> {
-    private code: string;
-
-    constructor (opts: ExecTaskOpts) {
-        super(_execCode, opts.code);
-        this.code = opts.code;
+    async runCode(code: string): Promise<void> {
+        // deno-lint-ignore no-explicit-any
+        let [res, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
+        console.log("res", res);
+        console.log("err", err);
+        if (err) {
+            // send error result
+            return;
+        }
+        res = await res;
+        // send res
     }
-}
-
-function _execCode(code: string) {
-    // deno-lint-ignore no-explicit-any
-    const [res, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
-    console.log("res", res);
-    console.log("err", err);
 }
 
 const parentIpcPort = Deno.env.get("PARENT_IPC_PORT");

@@ -1,24 +1,49 @@
 import { StdioPump, StdioPumpHandler } from "./stdio.ts";
-import { IpcComm, IpcMessageType } from "./ipc.ts";
+import { IpcComm, IpcExecMessage, IpcMessage } from "./ipc.ts";
+import { Task, TaskQueue } from "./queue.ts";
 
-export type StderrHandler = StdioPumpHandler;
-export type StdoutHandler = StdioPumpHandler;
-
+export type StdioHandler = StdioPumpHandler;
 export type HandshakeFn = (value: void | PromiseLike<void>) => void;
-
 export interface RemoteReplConfig {
     stdoutHandler: StdioPumpHandler,
     stderrHandler: StdioPumpHandler,
 }
 
+export type TaskArgs = [repl: RemoteRepl, code: string];
+export interface ExecTaskOpts {
+    repl: RemoteRepl;
+    code: string;
+}
+
+type ExecDoneFn = (value: unknown) => void;
+
+// deno-lint-ignore no-explicit-any
+export class ExecTask extends Task<TaskArgs, Promise<any>> {
+    private code: string;
+
+    constructor (opts: ExecTaskOpts) {
+        super(_sendCodeForExec, opts.repl, opts.code);
+        this.code = opts.code;
+    }
+}
+
+async function _sendCodeForExec(repl: RemoteRepl, code: string) {
+    await repl.ipc.send(new IpcExecMessage(code));
+    return new Promise((done) => {
+        repl.execDone = done;
+    });
+}
+
 export class RemoteRepl {
     private child: Deno.Process | null = null;
     childDone: Promise<Deno.ProcessStatus> | null = null;
+    execDone: ExecDoneFn | null = null;
     stdoutHandler: StdioPumpHandler;
     stderrHandler: StdioPumpHandler;
     ipc: IpcComm;
     handshakeCb: HandshakeFn | null = null;
     childRunningPromise: Promise<void> | null = null;
+    private taskQueue: TaskQueue<ExecTask>;
 
     constructor (cfg: RemoteReplConfig) {
         this.stdoutHandler = cfg.stdoutHandler;
@@ -26,6 +51,7 @@ export class RemoteRepl {
         this.ipc = new IpcComm({
             recvHandler: this.recvIpc.bind(this)
         });
+        this.taskQueue = new TaskQueue();
     }
 
     async init() {
@@ -45,7 +71,7 @@ export class RemoteRepl {
             this.childDone,
 
             // run queue: async iterator
-            // this.taskQueue.run(),
+            this.taskQueue.run(),
 
             // stdout, stderr
             // this.startStdioPump(this.child.stdout, this.stdoutHandler),
@@ -77,7 +103,7 @@ export class RemoteRepl {
         console.log("waiting for child");
         await this.childRunning();
         console.log("sending code:", code);
-        await this.ipc.send({ type: "exec", code });
+        await this.ipc.send(new IpcExecMessage({ code, history: true }));
     }
 
     #forkChild() {
@@ -97,14 +123,14 @@ export class RemoteRepl {
         return this.child;
     }
 
-    async recvIpc(msg: Record<string, unknown>) {
+    async recvIpc(msg: IpcMessage) {
         await console.log("parent got message:", msg);
         switch (msg.type) {
-            case "handshake":
+            case "ready":
                 this.doHandshake();
                 break;
-            case "exec_reply":
-                throw new Error("exec_reply not implemented yet");
+            case "execute_reply":
+                throw new Error("execute_reply not implemented yet");
             default:
                 throw new Error(`unknown message: ${msg}`);
         }
@@ -130,10 +156,4 @@ export class RemoteRepl {
 
     // history
     // autocomplete
-}
-
-function delay(ms: number) {
-    return new Promise((resolve) => {
-        setTimeout(resolve, ms);
-    });
 }

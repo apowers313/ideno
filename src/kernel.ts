@@ -1,5 +1,6 @@
 import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext, HmacKey, HandlerFn } from "./comm/comm.ts";
-import { StatusMessage, KernelInfoReplyMessage, KernelInfoContent, CommInfoContent, CommInfoReplyMessage, ShutdownReplyMessage } from "./comm/message.ts";
+import { StatusMessage, KernelInfoReplyMessage, KernelInfoContent, CommInfoContent, ExecuteRequestContent, CommInfoReplyMessage, ShutdownReplyMessage } from "./comm/message.ts";
+import { RemoteRepl } from "./shell/remote_repl.ts";
 import { desc } from "./types.ts";
 
 export interface KernelCfg {
@@ -47,6 +48,7 @@ export class Kernel {
     private connectionFile: string;
     private connectionSpec: ConnectionSpec | null = null;
     private commMap: Map<string, Comm> = new Map();
+    private repl: RemoteRepl;
 
     constructor (cfg: KernelCfg) {
         console.log("constructing IDeno kernel...");
@@ -65,6 +67,10 @@ export class Kernel {
             banner: desc.banner,
             sessionId: crypto.randomUUID(),
         };
+        this.repl = new RemoteRepl({
+            stdoutHandler: this.replStdoutHandler.bind(this),
+            stderrHandler: this.replStderrHandler.bind(this)
+        });
     }
 
     public async init() {
@@ -82,8 +88,10 @@ export class Kernel {
         this.addComm(HbComm, this.connectionSpec.hb_port, this.heartbeatHandler.bind(this));
         this.addComm(IOPubComm, this.connectionSpec.iopub_port, this.iopubHandler.bind(this));
 
-        await this.commInit();
-        // await Promise.all(promiseList);
+        await Promise.all([
+            this.commInit(),
+            this.repl.init(),
+        ]);
     }
 
     private addComm(commClass: CommClass, port: number, handler: HandlerFn) {
@@ -115,12 +123,14 @@ export class Kernel {
             case "comm_info_request":
                 m = new CommInfoReplyMessage(ctx, this.getCommInfo());
                 break;
+            case "execute_request":
+                this.repl.exec((ctx.msg.content as ExecuteRequestContent).code);
+                return;
             default:
                 throw new Error("unknown message type: " + ctx.msg.type);
         }
 
         await ctx.send(m);
-
         await this.setState("idle", ctx);
     }
 
@@ -228,5 +238,15 @@ export class Kernel {
             status: "ok",
             comms: {}
         };
+    }
+
+    // deno-lint-ignore require-await
+    public async replStdoutHandler(buf: Uint8Array) {
+        console.log("STDOUT:", buf);
+    }
+
+    // deno-lint-ignore require-await
+    public async replStderrHandler(buf: Uint8Array) {
+        console.log("STDERR:", buf);
     }
 }

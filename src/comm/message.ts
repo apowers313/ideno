@@ -44,7 +44,7 @@ export type StdinMessageRequestType = "input_request";
 export type StdinMessageReplyType = "input_reply";
 
 // content
-export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ShutdownContent;
+export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ExecuteReplyContent | ShutdownContent;
 
 export interface KernelInfoContent {
     status: "ok",
@@ -73,6 +73,28 @@ export interface KernelInfoContent {
 export interface CommInfoContent {
     status: "ok",
     comms: CommInfo | Record<never, never>;
+}
+
+export interface ExecuteRequestContent {
+    code: string,
+    // deno-lint-ignore camelcase
+    allow_stdin: boolean,
+    silent: boolean,
+    // deno-lint-ignore camelcase
+    stop_on_error: boolean,
+    // deno-lint-ignore camelcase
+    store_history: boolean,
+    // deno-lint-ignore camelcase
+    user_expressions: Record<never, never>,
+}
+
+export interface ExecuteReplyContent {
+    status: "ok" | "error",
+    // deno-lint-ignore camelcase
+    execution_count: number,
+    payload: [],
+    // deno-lint-ignore camelcase
+    user_expressions: [],
 }
 
 export interface ShutdownContent {
@@ -226,6 +248,12 @@ export class KernelInfoReplyMessage extends ReplyMessage {
 export class CommInfoReplyMessage extends ReplyMessage {
     constructor (ctx: CommContext, content: CommInfoContent) {
         super(ctx, "comm_info_reply", content);
+    }
+}
+
+export class ExecuteReplyMessage extends ReplyMessage {
+    constructor (ctx: CommContext, content: ExecuteReplyContent) {
+        super(ctx, "execute_reply", content);
     }
 }
 
