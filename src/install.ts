@@ -25,7 +25,7 @@ export async function installKernel(scriptPath: string) {
     Deno.copyFileSync(resolve("assets/logo-64x64.png"), resolve(tmpDir, "logo-64x64.png"));
 
     // install kernel via jupyter
-    let p = Deno.run({
+    const p = Deno.run({
         cmd: `jupyter kernelspec install --name deno ${tmpDir}`.split(" ")
     });
     await p.status();
