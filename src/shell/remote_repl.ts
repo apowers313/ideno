@@ -2,52 +2,92 @@ import { StdioPump, StdioPumpHandler } from "./stdio.ts";
 import { IpcComm, IpcExecMessage, IpcMessage } from "./ipc.ts";
 import { Task, TaskQueue } from "./queue.ts";
 
-export type StdioHandler = StdioPumpHandler;
 export type HandshakeFn = (value: void | PromiseLike<void>) => void;
-export interface RemoteReplConfig {
-    stdoutHandler: StdioPumpHandler,
-    stderrHandler: StdioPumpHandler,
-}
-
-export type TaskArgs = [repl: RemoteRepl, code: string];
-export interface ExecTaskOpts {
+export type ExecTaskArgs = [execCfg: ExecTaskCfg];
+export interface ExecTaskCfg {
     repl: RemoteRepl;
     code: string;
+    ctx: unknown;
 }
 
 type ExecDoneFn = (value: unknown) => void;
 
 // deno-lint-ignore no-explicit-any
-export class ExecTask extends Task<TaskArgs, Promise<any>> {
-    private code: string;
+export class ExecTask extends Task<ExecTaskArgs, Promise<any>> {
+    repl: RemoteRepl;
+    code: string;
+    ctx: unknown;
 
-    constructor (opts: ExecTaskOpts) {
-        super(_sendCodeForExec, opts.repl, opts.code);
-        this.code = opts.code;
+    constructor (cfg: ExecTaskCfg) {
+        super(_sendCodeForExec, cfg);
+        console.log("new ExecTask, ctx is:", cfg.ctx);
+        this.repl = cfg.repl;
+        this.code = cfg.code;
+        this.ctx = cfg.ctx;
     }
 }
 
-async function _sendCodeForExec(repl: RemoteRepl, code: string) {
-    await repl.ipc.send(new IpcExecMessage(code));
+async function _sendCodeForExec(cfg: ExecTaskCfg) {
+    await cfg.repl.ipc.send(new IpcExecMessage({
+        code: cfg.code,
+        history: true
+    }));
+
     return new Promise((done) => {
-        repl.execDone = done;
+        cfg.repl.execDone = (arg) => {
+            console.log("code done", cfg.code);
+            return done(arg);
+        };
     });
 }
 
-export class RemoteRepl {
+export interface ReplEventInterface {
+    type: "exec_result" | "stdout" | "stderr";
+}
+
+export class ReplEvent extends Event {
+    constructor (cfg: ReplEventInterface) {
+        super(cfg.type);
+    }
+}
+
+export class StdioEvent extends ReplEvent {
+    public data: string;
+
+    constructor (type: "stdout" | "stderr", data: string) {
+        super({ type });
+        this.data = data;
+    }
+}
+
+export interface ExecResultInterface {
+    status: "ok" | "error";
+    ctx: unknown;
+}
+
+export class ExecResultEvent extends ReplEvent {
+    status: string;
+    ctx: unknown;
+
+    constructor (cfg: ExecResultInterface) {
+        super({ type: "exec_result" });
+        this.status = cfg.status;
+        this.ctx = cfg.ctx;
+    }
+}
+
+export class RemoteRepl extends EventTarget {
     private child: Deno.Process | null = null;
     childDone: Promise<Deno.ProcessStatus> | null = null;
     execDone: ExecDoneFn | null = null;
-    stdoutHandler: StdioPumpHandler;
-    stderrHandler: StdioPumpHandler;
     ipc: IpcComm;
     handshakeCb: HandshakeFn | null = null;
     childRunningPromise: Promise<void> | null = null;
     private taskQueue: TaskQueue<ExecTask>;
 
-    constructor (cfg: RemoteReplConfig) {
-        this.stdoutHandler = cfg.stdoutHandler;
-        this.stderrHandler = cfg.stderrHandler;
+    constructor () {
+        super();
+
         this.ipc = new IpcComm({
             recvHandler: this.recvIpc.bind(this)
         });
@@ -56,9 +96,8 @@ export class RemoteRepl {
 
     async init() {
         await this.ipc.init();
-        console.log("PARENT IPC init done.");
+        this.#forkChild();
 
-        await this.#forkChild();
         if (!this.child //||
             // !this.child.stdout ||
             // !this.child.stderr
@@ -80,7 +119,6 @@ export class RemoteRepl {
             // ipc
             this.ipc.run(),
         ]);
-
     }
 
     async startStdioPump(stdio: Deno.Reader, handler: StdioPumpHandler) {
@@ -90,25 +128,37 @@ export class RemoteRepl {
         await pump.run();
     }
 
-    shutdown() {
-        // ipc shutdown
-        // kill child
+    async shutdown() {
+        await this.ipc.shutdown();
+        console.error("shutting down, killing child process not implemented");
     }
 
     interrupt() {
         // ???
     }
 
-    async exec(code: string) {
+    /**
+     * Requests that code be executed in the ExecutionContext. If code is already running it will be queued for future execution.
+     * This function resolves after the code is queued, not after it is done running. After the code is done an "exec_result"
+     * event will be fired.
+     * @param code The JavaScript to be executed in the ExecutionContext
+     * @param ctx An opaque parameter that is passed back as part of the "exec_result" event, used to keep state across execution requests
+     */
+    async queueExec(code: string, ctx?: unknown) {
         console.log("waiting for child");
         await this.childRunning();
-        console.log("sending code:", code);
-        await this.ipc.send(new IpcExecMessage({ code, history: true }));
+        // console.log("sending code:", code);
+        // await this.ipc.send(new IpcExecMessage({ code, history: true }));
+        this.taskQueue.addTask(new ExecTask({
+            repl: this,
+            code,
+            ctx
+        }));
     }
 
     #forkChild() {
         const childPath = import.meta.url.substring(0, import.meta.url.lastIndexOf('/')) + "/child.ts";
-        console.log("childPath", childPath);
+        console.debug("Starting script at:", childPath);
         this.child = Deno.run({
             cmd: `deno run --allow-all --unstable ${childPath}`.split(" "),
             env: {
@@ -117,22 +167,22 @@ export class RemoteRepl {
             // stdout: "piped",
             // stderr: "piped",
         });
-        console.log("running...");
         this.childDone = this.child.status();
 
         return this.child;
     }
 
     async recvIpc(msg: IpcMessage) {
-        await console.log("parent got message:", msg);
+        await console.debug("REPL got message:", msg);
         switch (msg.type) {
             case "ready":
                 this.doHandshake();
                 break;
-            case "execute_reply":
-                throw new Error("execute_reply not implemented yet");
+            case "exec_result":
+                this.execResult(msg);
+                break;
             default:
-                throw new Error(`unknown message: ${msg}`);
+                throw new Error(`unknown message: ${msg.type}`);
         }
     }
 
@@ -141,7 +191,6 @@ export class RemoteRepl {
             throw new Error("init() before doHandshake() or multiple handshakes received");
         }
 
-        console.log("do handshake");
         this.handshakeCb();
         this.handshakeCb = null;
     }
@@ -152,6 +201,22 @@ export class RemoteRepl {
             this.handshakeCb = resolve;
         });
         return this.childRunningPromise;
+    }
+
+    execResult(_evt: IpcMessage) {
+        console.log("REPL emitting exec result");
+        if (!this.taskQueue.currentTask) {
+            throw new Error("received exec result but no current task found");
+        }
+
+        console.log("current task", this.taskQueue.currentTask.code);
+        const e = new ExecResultEvent({ status: "ok", ctx: this.taskQueue.currentTask.ctx });
+        this.dispatchEvent(e);
+
+        if (!this.execDone) {
+            throw new Error("exec completed, but no execDone callback");
+        }
+        this.execDone(null);
     }
 
     // history

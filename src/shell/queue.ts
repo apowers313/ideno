@@ -43,6 +43,7 @@ export class TaskQueue<TaskType extends TaskInterface> {
     done = false;
     taskQueue: Array<TaskType> = [];
     pendingRequest: ResolveFn<TaskType> | null = null;
+    currentTask: TaskType | null = null;
 
     async run(): Promise<void> {
         for await (const taskPromise of this) {
@@ -53,15 +54,21 @@ export class TaskQueue<TaskType extends TaskInterface> {
             if (!task) {
                 throw new Error("got null task, should be impossible");
             }
+
+            this.currentTask = task;
             await task.run();
         }
+    }
+
+    shutdown() {
+        this.done = true;
     }
 
     getTask(): Promise<TaskType> {
         return new Promise((resolve) => {
             // if we already have a queue going, pull from the queue
             if (this.taskQueue.length !== 0) {
-                console.log("pulling task from queue");
+                console.debug("pulling task from queue");
                 const task = this.taskQueue.shift();
                 if (!task) {
                     throw new Error("array malfunction");
@@ -73,23 +80,27 @@ export class TaskQueue<TaskType extends TaskInterface> {
             if (this.pendingRequest) {
                 throw new Error("already have a pending request");
             }
-            console.log("task queue empty, waiting for task...");
+            console.debug("task queue empty, waiting for task...");
             this.pendingRequest = resolve;
         });
     }
 
-    addTask(task: TaskType) {
+    addTask(task: TaskType): void {
         // if we have a request waiting, run the task
         if (this.pendingRequest) {
-            console.log("received task, resuming queue");
+            console.debug("received task, resuming queue");
             this.pendingRequest(task);
             this.pendingRequest = null;
             return;
         }
 
         // if no request waiting, queue the request for the future
-        console.log("queue running, storing task");
+        console.debug("queue running, storing task");
         this.taskQueue.push(task);
+    }
+
+    clearTasks() {
+        this.taskQueue.length = 0;
     }
 
     [Symbol.asyncIterator](): IteratorInterface<TaskType> {
@@ -97,7 +108,6 @@ export class TaskQueue<TaskType extends TaskInterface> {
         const iter = {
             next: () => {
                 const retVal: Promise<TaskType> | null = this.done ? null : this.getTask();
-                console.log("next retVal", retVal);
                 return {
                     done: this.done,
                     value: retVal

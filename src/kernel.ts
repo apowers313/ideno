@@ -1,6 +1,6 @@
 import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext, HmacKey, HandlerFn } from "./comm/comm.ts";
 import { StatusMessage, KernelInfoReplyMessage, KernelInfoContent, CommInfoContent, ExecuteRequestContent, CommInfoReplyMessage, ShutdownReplyMessage } from "./comm/message.ts";
-import { RemoteRepl } from "./shell/remote_repl.ts";
+import { RemoteRepl, StdioEvent, ExecResultEvent } from "./shell/remote_repl.ts";
 import { desc } from "./types.ts";
 
 export interface KernelCfg {
@@ -39,7 +39,7 @@ export interface KernelMetadata {
     sessionId: string;
 }
 
-export type KernelState = "idle" | "busy";
+export type KernelState = "idle" | "busy" | "starting";
 
 export class Kernel {
     public metadata: KernelMetadata;
@@ -67,10 +67,10 @@ export class Kernel {
             banner: desc.banner,
             sessionId: crypto.randomUUID(),
         };
-        this.repl = new RemoteRepl({
-            stdoutHandler: this.replStdoutHandler.bind(this),
-            stderrHandler: this.replStderrHandler.bind(this)
-        });
+        this.repl = new RemoteRepl();
+        this.repl.addEventListener("stdout", (this.replStdoutHandler.bind(this) as EventListener));
+        this.repl.addEventListener("stderr", (this.replStderrHandler.bind(this) as EventListener));
+        this.repl.addEventListener("exec_result", (this.replExecResultHandler.bind(this) as EventListener));
     }
 
     public async init() {
@@ -124,7 +124,7 @@ export class Kernel {
                 m = new CommInfoReplyMessage(ctx, this.getCommInfo());
                 break;
             case "execute_request":
-                this.repl.exec((ctx.msg.content as ExecuteRequestContent).code);
+                this.repl.queueExec((ctx.msg.content as ExecuteRequestContent).code, ctx);
                 return;
             default:
                 throw new Error("unknown message type: " + ctx.msg.type);
@@ -240,13 +240,15 @@ export class Kernel {
         };
     }
 
-    // deno-lint-ignore require-await
-    public async replStdoutHandler(buf: Uint8Array) {
-        console.log("STDOUT:", buf);
+    replStdoutHandler(_e: Event): void {
+        throw new Error("stdout not implemented");
     }
 
-    // deno-lint-ignore require-await
-    public async replStderrHandler(buf: Uint8Array) {
-        console.log("STDERR:", buf);
+    replStderrHandler(_e: StdioEvent): void {
+        throw new Error("stderr not implemented");
+    }
+
+    replExecResultHandler(_e: ExecResultEvent): void {
+        throw new Error("exec result not implemented");
     }
 }

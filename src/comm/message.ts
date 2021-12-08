@@ -112,7 +112,7 @@ export type CommInfo = {
 
 export type StatusContent = {
     // deno-lint-ignore camelcase
-    execution_state: "idle" | "busy";
+    execution_state: "idle" | "busy" | "starting";
 };
 
 export interface MessageConfigInterface {

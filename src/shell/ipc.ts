@@ -1,7 +1,7 @@
 import { readLines } from "../../deps.ts";
 
 export type RawIpcMessageInterface = string;
-export type IpcMessageInterface = (ExecMsg | ExecResultMsg | ChildReadyMsg);
+export type IpcMessageInterface = ExecMsg | ExecResultMsg | ChildReadyMsg;
 export type IpcHandlerType = (msg: IpcMessage) => Promise<void>;
 
 export class IpcMessage {
