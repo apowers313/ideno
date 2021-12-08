@@ -1,14 +1,13 @@
-import {resolve, dirname} from "https://deno.land/std@0.116.0/path/mod.ts";
+import { resolve } from "https://deno.land/std@0.116.0/path/mod.ts";
 
-export async function installKernel(scriptPath:string) {
-    let baseDir:string = dirname(scriptPath);
-    let tmpDir:string = await Deno.makeTempDir();
-    let kernelJsonPath:string = resolve(tmpDir, "kernel.json");
+export async function installKernel(scriptPath: string) {
+    const tmpDir: string = await Deno.makeTempDir();
+    const kernelJsonPath: string = resolve(tmpDir, "kernel.json");
     console.log("tmpDir", tmpDir);
     console.log("kernelJsonPath", kernelJsonPath);
 
     // write kernel spec JSON
-    let jsonData = JSON.stringify({
+    const jsonData = JSON.stringify({
         // specification: https://jupyter-client.readthedocs.io/en/stable/kernels.html#kernel-specs
         argv: `deno run --allow-all --unstable ${scriptPath} kernel -c {connection_file}`.split(" "),
         display_name: "Deno",
@@ -32,7 +31,7 @@ export async function installKernel(scriptPath:string) {
     await p.status();
 
     // delete directory
-    Deno.removeSync(tmpDir, {recursive: true});
+    Deno.removeSync(tmpDir, { recursive: true });
 
     console.log("done.");
 }
