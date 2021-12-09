@@ -18,12 +18,6 @@ Deno.test("shell does exec", async () => {
     await rr.shutdown();
 });
 
-// function delay(ms: number) {
-//     return new Promise((resolve) => {
-//         setTimeout(resolve, ms);
-//     });
-// }
-
 async function doExec(rr: RemoteRepl) {
     await rr.queueExec(`console.log("hi bob");`, "one");
     await rr.queueExec(`let x = 3;\nx;`, "two");

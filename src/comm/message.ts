@@ -26,7 +26,7 @@ export type MessageReplyType = ShellMessageReplyType | ControlMessageReplyType |
 // shell messages
 export type ShellMessageType = ShellMessageRequestType | ShellMessageReplyType;
 export type ShellMessageRequestType = "kernel_info_request" | "comm_info_request" | "execute_request" | "inspect_request" | "complete_request" | "history_request" | "is_complete_request";
-export type ShellMessageReplyType = "kernel_info_reply" | "comm_info_reply" | "execute_reply" | "inspect_reply" | "complete_reply" | "history_reply" | "is_complete_reply";
+export type ShellMessageReplyType = "kernel_info_reply" | "comm_info_reply" | "execute_reply" | "execute_input" | "execute_result" | "inspect_reply" | "complete_reply" | "history_reply" | "is_complete_reply";
 
 // comm messages
 export type ControlMessageType = ControlMessageRequestType | ControlMessageReplyType;
@@ -44,7 +44,7 @@ export type StdinMessageRequestType = "input_request";
 export type StdinMessageReplyType = "input_reply";
 
 // content
-export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ExecuteReplyContent | ShutdownContent;
+export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ExecuteReplyContent | ExecuteInputContent | ExecuteResultContent | ShutdownContent;
 
 export interface KernelInfoContent {
     status: "ok",
@@ -95,6 +95,19 @@ export interface ExecuteReplyContent {
     payload: [],
     // deno-lint-ignore camelcase
     user_expressions: [],
+}
+
+export interface ExecuteInputContent {
+    status: "ok",
+    // deno-lint-ignore camelcase
+    execution_count: number,
+}
+
+export interface ExecuteResultContent {
+    // deno-lint-ignore camelcase
+    execution_count: number,
+    data: Record<never, never>,
+    metadata: Record<never, never>,
 }
 
 export interface ShutdownContent {
@@ -254,6 +267,30 @@ export class CommInfoReplyMessage extends ReplyMessage {
 export class ExecuteReplyMessage extends ReplyMessage {
     constructor (ctx: CommContext, content: ExecuteReplyContent) {
         super(ctx, "execute_reply", content);
+    }
+}
+
+export class ExecuteInputMessage extends ReplyMessage {
+    constructor (ctx: CommContext, execCnt: number) {
+        const content: ExecuteInputContent = {
+            status: "ok",
+            // deno-lint-ignore camelcase
+            execution_count: execCnt,
+        };
+
+        super(ctx, "execute_input", content);
+    }
+}
+
+export class ExecuteResultMessage extends ReplyMessage {
+    constructor (ctx: CommContext, execCnt: number) {
+        const content: ExecuteResultContent = {
+            // deno-lint-ignore camelcase
+            execution_count: execCnt,
+            data: {},
+            metadata: {},
+        };
+        super(ctx, "execute_result", content);
     }
 }
 

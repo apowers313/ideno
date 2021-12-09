@@ -1,5 +1,29 @@
-import { ShellComm, ControlComm, StdinComm, HbComm, IOPubComm, Comm, CommClass, CommContext, HmacKey, HandlerFn } from "./comm/comm.ts";
-import { StatusMessage, KernelInfoReplyMessage, KernelInfoContent, CommInfoContent, ExecuteRequestContent, CommInfoReplyMessage, ShutdownReplyMessage } from "./comm/message.ts";
+import {
+    ShellComm,
+    ControlComm,
+    StdinComm,
+    HbComm,
+    IOPubComm,
+    Comm,
+    CommClass,
+    CommContext,
+    HmacKey,
+    HandlerFn
+} from "./comm/comm.ts";
+
+import {
+    StatusMessage,
+    KernelInfoReplyMessage,
+    KernelInfoContent,
+    CommInfoContent,
+    ExecuteRequestContent,
+    ExecuteReplyMessage,
+    ExecuteInputMessage,
+    // ExecuteResultMessage,
+    CommInfoReplyMessage,
+    ShutdownReplyMessage
+} from "./comm/message.ts";
+
 import { RemoteRepl, StdioEvent, ExecResultEvent } from "./shell/remote_repl.ts";
 import { desc } from "./types.ts";
 
@@ -45,6 +69,7 @@ export class Kernel {
     public metadata: KernelMetadata;
     public hmacKey: HmacKey | null = null;
     public state: KernelState = "idle";
+    public execCounter = 0;
     private connectionFile: string;
     private connectionSpec: ConnectionSpec | null = null;
     private commMap: Map<string, Comm> = new Map();
@@ -68,9 +93,12 @@ export class Kernel {
             sessionId: crypto.randomUUID(),
         };
         this.repl = new RemoteRepl();
-        this.repl.addEventListener("stdout", (this.replStdoutHandler.bind(this) as EventListener));
-        this.repl.addEventListener("stderr", (this.replStderrHandler.bind(this) as EventListener));
-        this.repl.addEventListener("exec_result", (this.replExecResultHandler.bind(this) as EventListener));
+        this.repl.addEventListener("exec_result", (this.finishExec.bind(this) as EventListener));
+        this.repl.addEventListener("stderr", (this.replStdioHandler.bind(this) as EventListener));
+        this.repl.addEventListener("stdout", (this.replStdioHandler.bind(this) as EventListener));
+        this.repl.addEventListener("stdout", (evt: Event) => {
+            console.log("GOT EVENT", evt);
+        });
     }
 
     public async init() {
@@ -124,7 +152,7 @@ export class Kernel {
                 m = new CommInfoReplyMessage(ctx, this.getCommInfo());
                 break;
             case "execute_request":
-                this.repl.queueExec((ctx.msg.content as ExecuteRequestContent).code, ctx);
+                await this.startExec(ctx);
                 return;
             default:
                 throw new Error("unknown message type: " + ctx.msg.type);
@@ -240,15 +268,45 @@ export class Kernel {
         };
     }
 
-    replStdoutHandler(_e: Event): void {
-        throw new Error("stdout not implemented");
+    async startExec(ctx: CommContext) {
+        const execContent = (ctx.msg.content as ExecuteRequestContent);
+        if (execContent.store_history) {
+            this.execCounter++;
+        }
+
+        await this.repl.queueExec(execContent.code, ctx);
+
+        const m = new ExecuteInputMessage(ctx, this.execCounter);
+        const ioPubComm = this.commMap.get("iopub");
+        if (!ioPubComm) {
+            throw new Error("call init() before startExec()");
+        }
+
+        await ioPubComm.send(m);
     }
 
-    replStderrHandler(_e: StdioEvent): void {
-        throw new Error("stderr not implemented");
+    async finishExec(evt: ExecResultEvent) {
+        const ctx = (evt.ctx as CommContext);
+
+        const m = new ExecuteReplyMessage(ctx, {
+            status: "ok",
+            execution_count: this.execCounter,
+            payload: [],
+            user_expressions: []
+        });
+        await ctx.send(m);
+
+        console.error("*** done with exec: execute_result and errors not handled");
+
+        // TODO:
+        // if (evt.result) {
+        //     iopub.send execute_result;
+        // }
+
+        await this.setState("idle", ctx);
     }
 
-    replExecResultHandler(_e: ExecResultEvent): void {
-        throw new Error("exec result not implemented");
+    replStdioHandler(_e: Event): void {
+        throw new Error("stdio not implemented");
     }
 }

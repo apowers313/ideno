@@ -34,6 +34,10 @@ async function _sendCodeForExec(cfg: ExecTaskCfg) {
     }));
 
     return new Promise((done) => {
+        if (cfg.repl.execDone) {
+            throw new Error("attempting to execute two tasks at the same time, shouldn't be possible");
+        }
+
         cfg.repl.execDone = (arg) => {
             console.log("code done", cfg.code);
             return done(arg);
@@ -98,9 +102,9 @@ export class RemoteRepl extends EventTarget {
         await this.ipc.init();
         this.#forkChild();
 
-        if (!this.child //||
-            // !this.child.stdout ||
-            // !this.child.stderr
+        if (!this.child ||
+            !this.child.stdout ||
+            !this.child.stderr
         ) {
             throw new Error("error spawning child process");
         }
@@ -108,13 +112,14 @@ export class RemoteRepl extends EventTarget {
         await Promise.all([
             // spawn
             this.childDone,
+            this.childRunning(),
 
             // run queue: async iterator
             this.taskQueue.run(),
 
             // stdout, stderr
-            // this.startStdioPump(this.child.stdout, this.stdoutHandler),
-            // this.startStdioPump(this.child.stderr, this.stderrHandler),
+            this.startStdioPump(this.child.stdout, this.stdioHandler.bind(this, "stdout")),
+            this.startStdioPump(this.child.stderr, this.stdioHandler.bind(this, "stderr")),
 
             // ipc
             this.ipc.run(),
@@ -128,34 +133,6 @@ export class RemoteRepl extends EventTarget {
         await pump.run();
     }
 
-    async shutdown() {
-        await this.ipc.shutdown();
-        console.error("shutting down, killing child process not implemented");
-    }
-
-    interrupt() {
-        // ???
-    }
-
-    /**
-     * Requests that code be executed in the ExecutionContext. If code is already running it will be queued for future execution.
-     * This function resolves after the code is queued, not after it is done running. After the code is done an "exec_result"
-     * event will be fired.
-     * @param code The JavaScript to be executed in the ExecutionContext
-     * @param ctx An opaque parameter that is passed back as part of the "exec_result" event, used to keep state across execution requests
-     */
-    async queueExec(code: string, ctx?: unknown) {
-        console.log("waiting for child");
-        await this.childRunning();
-        // console.log("sending code:", code);
-        // await this.ipc.send(new IpcExecMessage({ code, history: true }));
-        this.taskQueue.addTask(new ExecTask({
-            repl: this,
-            code,
-            ctx
-        }));
-    }
-
     #forkChild() {
         const childPath = import.meta.url.substring(0, import.meta.url.lastIndexOf('/')) + "/child.ts";
         console.debug("Starting script at:", childPath);
@@ -164,8 +141,8 @@ export class RemoteRepl extends EventTarget {
             env: {
                 PARENT_IPC_PORT: this.ipc.port.toString(),
             },
-            // stdout: "piped",
-            // stderr: "piped",
+            stdout: "piped",
+            stderr: "piped",
         });
         this.childDone = this.child.status();
 
@@ -188,7 +165,7 @@ export class RemoteRepl extends EventTarget {
 
     doHandshake() {
         if (!this.handshakeCb) {
-            throw new Error("init() before doHandshake() or multiple handshakes received");
+            throw new Error("call init() before doHandshake() or multiple handshakes received");
         }
 
         this.handshakeCb();
@@ -203,13 +180,41 @@ export class RemoteRepl extends EventTarget {
         return this.childRunningPromise;
     }
 
+    // deno-lint-ignore require-await
+    async stdioHandler(io: "stdout" | "stderr", text: string) {
+        const e = new StdioEvent(io, text);
+        console.debug(`STDIO ${io} text:\n==============================\n${text}\n==============================\n\n`);
+        console.log("emitting", e);
+        this.addEventListener("stdout", (evt: Event) => {
+            console.log("WTF");
+        });
+        this.dispatchEvent(e);
+    }
+
+    /**
+     * Requests that code be executed in the ExecutionContext. If code is already running it will be queued for future execution.
+     * This function resolves after the code is queued, not after it is done running. After the code is done an "exec_result"
+     * event will be fired.
+     * @param code The JavaScript to be executed in the ExecutionContext
+     * @param ctx An opaque parameter that is passed back as part of the "exec_result" event, used to keep state across execution requests
+     */
+    async queueExec(code: string, ctx?: unknown) {
+        console.log("waiting for child");
+        await this.childRunning();
+        // console.log("sending code:", code);
+        // await this.ipc.send(new IpcExecMessage({ code, history: true }));
+        this.taskQueue.addTask(new ExecTask({
+            repl: this,
+            code,
+            ctx
+        }));
+    }
+
     execResult(_evt: IpcMessage) {
-        console.log("REPL emitting exec result");
         if (!this.taskQueue.currentTask) {
             throw new Error("received exec result but no current task found");
         }
 
-        console.log("current task", this.taskQueue.currentTask.code);
         const e = new ExecResultEvent({ status: "ok", ctx: this.taskQueue.currentTask.ctx });
         this.dispatchEvent(e);
 
@@ -217,6 +222,16 @@ export class RemoteRepl extends EventTarget {
             throw new Error("exec completed, but no execDone callback");
         }
         this.execDone(null);
+        this.execDone = null;
+    }
+
+    async shutdown() {
+        await this.ipc.shutdown();
+        console.error("shutting down, killing child process not implemented");
+    }
+
+    interrupt() {
+        // ???
     }
 
     // history

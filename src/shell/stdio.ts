@@ -1,6 +1,6 @@
 import { BufReader } from "https://deno.land/std@0.117.0/io/mod.ts";
 
-export type StdioPumpHandler = (buf: Uint8Array, sz: number) => Promise<void>;
+export type StdioPumpHandler = (str: string) => Promise<void>;
 
 export interface StdioPumpConfig {
     stdio: Deno.Reader;
@@ -29,8 +29,8 @@ export class StdioPump {
                 console.error("StdioPump BufReader returned null");
                 break;
             }
-            console.log("read n bytes:", n);
-            await this.handler(buf, n);
+            const str = new TextDecoder().decode(buf.buffer.slice(0, n));
+            await this.handler(str);
         }
     }
 }
