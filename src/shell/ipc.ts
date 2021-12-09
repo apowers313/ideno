@@ -1,5 +1,8 @@
 import { readLines } from "../../deps.ts";
 
+// deno-lint-ignore no-explicit-any
+function log(..._args: Array<any>) { }
+
 export type RawIpcMessageInterface = string;
 export type IpcMessageInterface = ExecMsg | ExecResultMsg | ExecContextReadyMsg;
 export type IpcHandlerType = (msg: IpcMessage) => Promise<void>;
@@ -115,7 +118,7 @@ export class IpcComm {
 
     async init() {
         if (!this.port) {
-            console.log("creating server socket...");
+            log("creating server socket...");
             this.isServer = true;
             this.listeningSocket = Deno.listen({
                 transport: "tcp",
@@ -146,7 +149,7 @@ export class IpcComm {
             if (!this.listeningSocket) throw new Error("call init() before run() for server");
             if (this.socket) throw new Error("run() called multiple times");
             // accept just one connection
-            console.log("waiting for client to connect..");
+            log("waiting for client to connect..");
             this.socket = await this.listeningSocket.accept();
         }
 
@@ -156,7 +159,7 @@ export class IpcComm {
 
         for await (const msg of readLines(this.socket)) {
             // const msg = new TextDecoder().decode(pkt);
-            console.log("IPC RECV:", msg);
+            log("IPC RECV:", msg);
             const ret = new IpcMessage(msg);
             await this.recvHandler(ret);
         }
@@ -169,7 +172,7 @@ export class IpcComm {
         }
 
         const data = msg.serialize();
-        console.log("IPC SEND:", data);
+        log("IPC SEND:", data);
         await this.socket.write(new TextEncoder().encode(data));
     }
 }
