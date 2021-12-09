@@ -1,13 +1,16 @@
-import { IpcComm, IpcMessage, IpcChildReadyMessage, IpcExecMessage, IpcExecResultMessage } from "./ipc.ts";
+import { IpcComm, IpcMessage, IpcExecContextReadyMessage, IpcExecMessage, IpcExecResultMessage } from "./ipc.ts";
 
-interface ChildConfig {
+// deno-lint-ignore no-explicit-any
+function log(..._args: Array<any>) { }
+
+interface ExecContextConfig {
     parentPort: number,
 }
 
-class Child {
+class ExecContext {
     ipc: IpcComm;
 
-    constructor (cfg: ChildConfig) {
+    constructor (cfg: ExecContextConfig) {
 
         this.ipc = new IpcComm({
             recvHandler: this.recvHandler.bind(this),
@@ -20,16 +23,16 @@ class Child {
     }
 
     async run() {
-        console.debug("child running...");
+        log("exec context running...");
         await Promise.all([
             this.ipc.run(),
-            this.ipc.send(new IpcChildReadyMessage()),
+            this.ipc.send(new IpcExecContextReadyMessage()),
         ]);
-        console.debug("child done running.");
+        log("exec context done running.");
     }
 
     async recvHandler(msg: IpcMessage) {
-        console.debug("child got msg", msg);
+        log("exec context got msg", msg);
         switch (msg.type) {
             case "exec":
                 await this.runCode((msg as IpcExecMessage).data.code);
@@ -42,8 +45,8 @@ class Child {
     async runCode(code: string): Promise<void> {
         // deno-lint-ignore no-explicit-any
         let [res, err] = (Deno as any).core.evalContext(code, "<ideno kernel>");
-        console.log("res", res);
-        console.log("err", err);
+        log("res", res);
+        log("err", err);
         if (err) {
             await this.ipc.send(new IpcExecResultMessage({ status: "error" }));
             return;
@@ -60,8 +63,8 @@ const parentIpcPort = Deno.env.get("PARENT_IPC_PORT");
 if (!parentIpcPort) {
     throw new Error("IPC comm environment variable 'PARENT_IPC_PORT' not defined");
 }
-console.debug("child will connect to port", parentIpcPort);
-const c = new Child({
+log("exec context will connect to port", parentIpcPort);
+const c = new ExecContext({
     parentPort: parseInt(parentIpcPort),
 });
 await c.init();
