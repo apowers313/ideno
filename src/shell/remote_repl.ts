@@ -46,21 +46,27 @@ async function _sendCodeForExec(cfg: ExecTaskCfg) {
 }
 
 export interface ReplEventInterface {
-    type: "exec_result" | "stdout" | "stderr";
+    type: "exec_result" | "stdout" | "stderr",
+    ctx: unknown,
 }
 
 export class ReplEvent extends Event {
+    ctx: unknown;
+
     constructor (cfg: ReplEventInterface) {
         super(cfg.type);
+        this.ctx = cfg.ctx;
     }
 }
 
 export class StdioEvent extends ReplEvent {
     public data: string;
+    public type: "stdout" | "stderr";
 
-    constructor (type: "stdout" | "stderr", data: string) {
-        super({ type });
+    constructor (type: "stdout" | "stderr", data: string, ctx: unknown) {
+        super({ type, ctx });
         this.data = data;
+        this.type = type;
     }
 }
 
@@ -74,7 +80,7 @@ export class ExecResultEvent extends ReplEvent {
     ctx: unknown;
 
     constructor (cfg: ExecResultInterface) {
-        super({ type: "exec_result" });
+        super({ type: "exec_result", ctx: cfg.ctx });
         this.status = cfg.status;
         this.ctx = cfg.ctx;
     }
@@ -182,12 +188,14 @@ export class RemoteRepl extends EventTarget {
 
     // deno-lint-ignore require-await
     async stdioHandler(io: "stdout" | "stderr", text: string) {
-        const e = new StdioEvent(io, text);
+        if (!this.taskQueue.currentTask) {
+            console.warn("DROPPING", io, text);
+            return;
+        }
+
+        const e = new StdioEvent(io, text, this.taskQueue.currentTask.ctx);
         console.debug(`STDIO ${io} text:\n==============================\n${text}\n==============================\n\n`);
         console.log("emitting", e);
-        this.addEventListener("stdout", (evt: Event) => {
-            console.log("WTF");
-        });
         this.dispatchEvent(e);
     }
 

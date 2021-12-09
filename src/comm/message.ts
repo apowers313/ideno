@@ -26,7 +26,7 @@ export type MessageReplyType = ShellMessageReplyType | ControlMessageReplyType |
 // shell messages
 export type ShellMessageType = ShellMessageRequestType | ShellMessageReplyType;
 export type ShellMessageRequestType = "kernel_info_request" | "comm_info_request" | "execute_request" | "inspect_request" | "complete_request" | "history_request" | "is_complete_request";
-export type ShellMessageReplyType = "kernel_info_reply" | "comm_info_reply" | "execute_reply" | "execute_input" | "execute_result" | "inspect_reply" | "complete_reply" | "history_reply" | "is_complete_reply";
+export type ShellMessageReplyType = "kernel_info_reply" | "comm_info_reply" | "execute_reply" | "execute_input" | "execute_result" | "stream" | "inspect_reply" | "complete_reply" | "history_reply" | "is_complete_reply";
 
 // comm messages
 export type ControlMessageType = ControlMessageRequestType | ControlMessageReplyType;
@@ -44,7 +44,7 @@ export type StdinMessageRequestType = "input_request";
 export type StdinMessageReplyType = "input_reply";
 
 // content
-export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ExecuteReplyContent | ExecuteInputContent | ExecuteResultContent | ShutdownContent;
+export type MessageContent = KernelInfoContent | StatusContent | CommInfoContent | ExecuteReplyContent | ExecuteInputContent | ExecuteResultContent | StreamContent | ShutdownContent;
 
 export interface KernelInfoContent {
     status: "ok",
@@ -108,6 +108,11 @@ export interface ExecuteResultContent {
     execution_count: number,
     data: Record<never, never>,
     metadata: Record<never, never>,
+}
+
+export interface StreamContent {
+    name: "stdout" | "stderr",
+    text: string;
 }
 
 export interface ShutdownContent {
@@ -291,6 +296,13 @@ export class ExecuteResultMessage extends ReplyMessage {
             metadata: {},
         };
         super(ctx, "execute_result", content);
+    }
+}
+
+export class StreamMessage extends ReplyMessage {
+    constructor (ctx: CommContext, name: "stdout" | "stderr", text: string) {
+        const content: StreamContent = { name, text };
+        super(ctx, "stream", content);
     }
 }
 

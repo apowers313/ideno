@@ -20,6 +20,7 @@ import {
     ExecuteReplyMessage,
     ExecuteInputMessage,
     // ExecuteResultMessage,
+    StreamMessage,
     CommInfoReplyMessage,
     ShutdownReplyMessage
 } from "./comm/message.ts";
@@ -96,9 +97,6 @@ export class Kernel {
         this.repl.addEventListener("exec_result", (this.finishExec.bind(this) as EventListener));
         this.repl.addEventListener("stderr", (this.replStdioHandler.bind(this) as EventListener));
         this.repl.addEventListener("stdout", (this.replStdioHandler.bind(this) as EventListener));
-        this.repl.addEventListener("stdout", (evt: Event) => {
-            console.log("GOT EVENT", evt);
-        });
     }
 
     public async init() {
@@ -306,7 +304,13 @@ export class Kernel {
         await this.setState("idle", ctx);
     }
 
-    replStdioHandler(_e: Event): void {
-        throw new Error("stdio not implemented");
+    replStdioHandler(evt: StdioEvent): void {
+        const ctx = (evt.ctx as CommContext);
+
+        const ioPubComm = this.commMap.get("iopub");
+        if (!ioPubComm) {
+            throw new Error("call init() before replStdioHandler()");
+        }
+        ioPubComm.send(new StreamMessage(ctx, evt.type, evt.data));
     }
 }
