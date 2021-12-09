@@ -106,7 +106,7 @@ export interface ExecuteInputContent {
 export interface ExecuteResultContent {
     // deno-lint-ignore camelcase
     execution_count: number,
-    data: Record<never, never>,
+    data: TextDisplayData,
     metadata: Record<never, never>,
 }
 
@@ -269,12 +269,6 @@ export class CommInfoReplyMessage extends ReplyMessage {
     }
 }
 
-export class ExecuteReplyMessage extends ReplyMessage {
-    constructor (ctx: CommContext, content: ExecuteReplyContent) {
-        super(ctx, "execute_reply", content);
-    }
-}
-
 export class ExecuteInputMessage extends ReplyMessage {
     constructor (ctx: CommContext, execCnt: number) {
         const content: ExecuteInputContent = {
@@ -287,12 +281,25 @@ export class ExecuteInputMessage extends ReplyMessage {
     }
 }
 
+export class ExecuteReplyMessage extends ReplyMessage {
+    constructor (ctx: CommContext, content: ExecuteReplyContent) {
+        super(ctx, "execute_reply", content);
+    }
+}
+
+export interface TextDisplayData {
+    "text/plain": string;
+}
+
 export class ExecuteResultMessage extends ReplyMessage {
-    constructor (ctx: CommContext, execCnt: number) {
+    // deno-lint-ignore no-explicit-any
+    constructor (ctx: CommContext, execCnt: number, result: any) {
         const content: ExecuteResultContent = {
             // deno-lint-ignore camelcase
             execution_count: execCnt,
-            data: {},
+            data: {
+                "text/plain": Deno.inspect(result)
+            },
             metadata: {},
         };
         super(ctx, "execute_result", content);

@@ -1,5 +1,5 @@
 import { StdioPump, StdioPumpHandler } from "./stdio.ts";
-import { IpcComm, IpcExecMessage, IpcMessage } from "./ipc.ts";
+import { IpcComm, IpcExecMessage, IpcExecResultMessage, IpcMessage, ExecResultMsg } from "./ipc.ts";
 import { Task, TaskQueue } from "./queue.ts";
 
 export type HandshakeFn = (value: void | PromiseLike<void>) => void;
@@ -34,11 +34,11 @@ async function _sendCodeForExec(cfg: ExecTaskCfg) {
     }));
 
     return new Promise((done) => {
-        if (cfg.repl.execDone) {
+        if (cfg.repl.execDoneResolve) {
             throw new Error("attempting to execute two tasks at the same time, shouldn't be possible");
         }
 
-        cfg.repl.execDone = (arg) => {
+        cfg.repl.execDoneResolve = (arg) => {
             console.log("code done", cfg.code);
             return done(arg);
         };
@@ -70,26 +70,31 @@ export class StdioEvent extends ReplEvent {
     }
 }
 
-export interface ExecResultInterface {
+export interface ExecDoneInterface {
     status: "ok" | "error";
+    // deno-lint-ignore no-explicit-any
+    result: any;
     ctx: unknown;
 }
 
-export class ExecResultEvent extends ReplEvent {
+export class ExecDoneEvent extends ReplEvent {
     status: string;
     ctx: unknown;
+    // deno-lint-ignore no-explicit-any
+    result: any;
 
-    constructor (cfg: ExecResultInterface) {
+    constructor (cfg: ExecDoneInterface) {
         super({ type: "exec_result", ctx: cfg.ctx });
         this.status = cfg.status;
         this.ctx = cfg.ctx;
+        this.result = cfg.result;
     }
 }
 
 export class RemoteRepl extends EventTarget {
     private child: Deno.Process | null = null;
-    childDone: Promise<Deno.ProcessStatus> | null = null;
-    execDone: ExecDoneFn | null = null;
+    childDonePromise: Promise<Deno.ProcessStatus> | null = null;
+    execDoneResolve: ExecDoneFn | null = null;
     ipc: IpcComm;
     handshakeCb: HandshakeFn | null = null;
     childRunningPromise: Promise<void> | null = null;
@@ -117,7 +122,7 @@ export class RemoteRepl extends EventTarget {
 
         await Promise.all([
             // spawn
-            this.childDone,
+            this.childDonePromise,
             this.childRunning(),
 
             // run queue: async iterator
@@ -150,7 +155,7 @@ export class RemoteRepl extends EventTarget {
             stdout: "piped",
             stderr: "piped",
         });
-        this.childDone = this.child.status();
+        this.childDonePromise = this.child.status();
 
         return this.child;
     }
@@ -162,7 +167,7 @@ export class RemoteRepl extends EventTarget {
                 this.doHandshake();
                 break;
             case "exec_result":
-                this.execResult(msg);
+                this.execDone((msg as IpcExecResultMessage));
                 break;
             default:
                 throw new Error(`unknown message: ${msg.type}`);
@@ -195,7 +200,7 @@ export class RemoteRepl extends EventTarget {
 
         const e = new StdioEvent(io, text, this.taskQueue.currentTask.ctx);
         console.debug(`STDIO ${io} text:\n==============================\n${text}\n==============================\n\n`);
-        console.log("emitting", e);
+        console.debug("emitting", e);
         this.dispatchEvent(e);
     }
 
@@ -207,10 +212,8 @@ export class RemoteRepl extends EventTarget {
      * @param ctx An opaque parameter that is passed back as part of the "exec_result" event, used to keep state across execution requests
      */
     async queueExec(code: string, ctx?: unknown) {
-        console.log("waiting for child");
+        console.debug("queueExec waiting for child");
         await this.childRunning();
-        // console.log("sending code:", code);
-        // await this.ipc.send(new IpcExecMessage({ code, history: true }));
         this.taskQueue.addTask(new ExecTask({
             repl: this,
             code,
@@ -218,19 +221,24 @@ export class RemoteRepl extends EventTarget {
         }));
     }
 
-    execResult(_evt: IpcMessage) {
+    execDone(msg: IpcExecResultMessage) {
         if (!this.taskQueue.currentTask) {
             throw new Error("received exec result but no current task found");
         }
 
-        const e = new ExecResultEvent({ status: "ok", ctx: this.taskQueue.currentTask.ctx });
+        console.log("IpcExecResultMessage", msg);
+
+        // XXX TODO
+        const e = new ExecDoneEvent({ status: "ok", result: (msg.data as ExecResultMsg).result, ctx: this.taskQueue.currentTask.ctx });
+        console.log("ExecDoneEvent", e);
+        console.log("ExecDoneEvent.result", e.result);
         this.dispatchEvent(e);
 
-        if (!this.execDone) {
+        if (!this.execDoneResolve) {
             throw new Error("exec completed, but no execDone callback");
         }
-        this.execDone(null);
-        this.execDone = null;
+        this.execDoneResolve(null);
+        this.execDoneResolve = null;
     }
 
     async shutdown() {

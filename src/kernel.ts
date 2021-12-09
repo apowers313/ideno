@@ -19,13 +19,13 @@ import {
     ExecuteRequestContent,
     ExecuteReplyMessage,
     ExecuteInputMessage,
-    // ExecuteResultMessage,
+    ExecuteResultMessage,
     StreamMessage,
     CommInfoReplyMessage,
     ShutdownReplyMessage
 } from "./comm/message.ts";
 
-import { RemoteRepl, StdioEvent, ExecResultEvent } from "./shell/remote_repl.ts";
+import { RemoteRepl, StdioEvent, ExecDoneEvent } from "./shell/remote_repl.ts";
 import { desc } from "./types.ts";
 
 export interface KernelCfg {
@@ -181,17 +181,17 @@ export class Kernel {
 
     // deno-lint-ignore no-unused-vars require-await
     public async stdinHandler(ctx: CommContext) {
-        console.log("stdin msg received");
+        throw new Error("stdin msg received, not implemented");
     }
 
     // deno-lint-ignore no-unused-vars require-await
     public async heartbeatHandler(ctx: CommContext) {
-        console.log("heartbeat msg received");
+        throw new Error("heartbeat msg received, not implemented");
     }
 
     // deno-lint-ignore no-unused-vars require-await
     public async iopubHandler(ctx: CommContext) {
-        console.log("iopub msg received");
+        throw new Error("iopub msg received, shouldn't happen");
     }
 
     public async setState(state: KernelState, ctx: CommContext) {
@@ -283,23 +283,30 @@ export class Kernel {
         await ioPubComm.send(m);
     }
 
-    async finishExec(evt: ExecResultEvent) {
+    async finishExec(evt: ExecDoneEvent) {
         const ctx = (evt.ctx as CommContext);
 
-        const m = new ExecuteReplyMessage(ctx, {
+        const replyMsg = new ExecuteReplyMessage(ctx, {
             status: "ok",
             execution_count: this.execCounter,
             payload: [],
             user_expressions: []
         });
-        await ctx.send(m);
+        await ctx.send(replyMsg);
+
+        console.log("EVENT RESULT:", evt.result);
+        if (evt.result !== undefined) {
+            console.log("sending result");
+            const ioPubComm = this.commMap.get("iopub");
+            if (!ioPubComm) {
+                throw new Error("call init() before startExec()");
+            }
+            const resultMsg = new ExecuteResultMessage(ctx, this.execCounter, evt.result);
+            console.log("resultMsg", resultMsg);
+            await ioPubComm.send(resultMsg);
+        }
 
         console.error("*** done with exec: execute_result and errors not handled");
-
-        // TODO:
-        // if (evt.result) {
-        //     iopub.send execute_result;
-        // }
 
         await this.setState("idle", ctx);
     }

@@ -1,4 +1,4 @@
-import { IpcComm, IpcMessage, IpcExecContextReadyMessage, IpcExecMessage, IpcExecResultMessage } from "./ipc.ts";
+import { IpcComm, IpcMessage, IpcExecContextReadyMessage, IpcExecMessage, IpcExecErrorMessage, IpcExecResultMessage } from "./ipc.ts";
 
 // deno-lint-ignore no-explicit-any
 function log(..._args: Array<any>) { }
@@ -48,14 +48,14 @@ class ExecContext {
         log("res", res);
         log("err", err);
         if (err) {
-            await this.ipc.send(new IpcExecResultMessage({ status: "error" }));
+            await this.ipc.send(new IpcExecErrorMessage({ status: "error", error: err }));
             return;
         }
 
         // if 'res' is a Promise, resolve it
         res = await res;
 
-        await this.ipc.send(new IpcExecResultMessage({ status: "ok" }));
+        await this.ipc.send(new IpcExecResultMessage({ status: "ok", result: res }));
     }
 }
 

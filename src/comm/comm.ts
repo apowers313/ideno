@@ -88,7 +88,7 @@ export class Comm {
         await socket.bind(connStr);
     }
 
-    private async routerInit(connStr: string) {
+    protected async routerInit(connStr: string) {
         const socket = (this.socket as zmq.Replier);
         await socket.bind(connStr);
 
@@ -245,6 +245,15 @@ export class HbComm extends Comm {
             sessionId: cfg.sessionId,
             handler: cfg.handler,
         });
+    }
+
+    protected async routerInit(connStr: string) {
+        const socket = (this.socket as zmq.Replier);
+        await socket.bind(connStr);
+
+        for await (const message of socket) {
+            console.log(">>> heartbeat received message", message);
+        }
     }
 }
 

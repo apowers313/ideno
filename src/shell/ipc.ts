@@ -4,14 +4,14 @@ import { readLines } from "../../deps.ts";
 function log(..._args: Array<any>) { }
 
 export type RawIpcMessageInterface = string;
-export type IpcMessageInterface = ExecMsg | ExecResultMsg | ExecContextReadyMsg;
+export type IpcMessageInterface = ExecMsg | ExecResultMsg | ExecErrorMsg | ExecContextReadyMsg;
 export type IpcHandlerType = (msg: IpcMessage) => Promise<void>;
 
 export class IpcMessage {
     data: IpcMessageInterface;
     type: string;
 
-    constructor (value: RawIpcMessageInterface | IpcMessageInterface) {
+    constructor (value: IpcMessageInterface | RawIpcMessageInterface) {
         let data: IpcMessageInterface;
         if (typeof value === "string") {
             data = this.parse(value);
@@ -48,11 +48,12 @@ export interface ExecMsg {
 }
 
 export class IpcExecMessage extends IpcMessage {
-    declare data: ExecMsg;
+    data: ExecMsg;
 
     constructor (data: ExecMsg | RawIpcMessageInterface) {
         if (typeof data === "object") data.type = "exec";
         super(data);
+        this.data = (data as ExecMsg);
     }
 
     validate(data: ExecMsg): data is ExecMsg {
@@ -68,12 +69,27 @@ export class IpcExecMessage extends IpcMessage {
 
 export interface ExecResultMsg {
     type?: "exec_result",
-    status: "ok" | "error" | "abort",
+    status: "ok",
+    // deno-lint-ignore no-explicit-any
+    result: any;
 }
 
 export class IpcExecResultMessage extends IpcMessage {
     constructor (data: ExecResultMsg | RawIpcMessageInterface) {
         if (typeof data === "object") data.type = "exec_result";
+        super(data);
+    }
+}
+
+export interface ExecErrorMsg {
+    type?: "exec_error",
+    status: "error",
+    error: Error,
+}
+
+export class IpcExecErrorMessage extends IpcMessage {
+    constructor (data: ExecErrorMsg | RawIpcMessageInterface) {
+        if (typeof data === "object") data.type = "exec_error";
         super(data);
     }
 }
