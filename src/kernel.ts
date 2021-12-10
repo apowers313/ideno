@@ -217,9 +217,8 @@ export class Kernel {
     public static async parseConnectionFile(filename: string): Promise<ConnectionSpec> {
         // parse connection file
         const connectionFile = await Deno.readTextFile(filename);
-        console.log("connectionFile", connectionFile);
+        console.debug("connectionFile", connectionFile);
         const connectionSpec = JSON.parse(connectionFile);
-        console.log("connectionSpec", connectionSpec);
 
         if (typeof connectionSpec.ip !== "string" ||
             typeof connectionSpec.control_port !== "number" ||
