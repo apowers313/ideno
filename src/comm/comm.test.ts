@@ -1,16 +1,27 @@
-// import { ControlComm, ShellComm } from "./comm.ts";
-// import { Kernel } from "../kernel.ts";
-// import { msg as shutdownMsg } from "./testdata/shutdown.packet.ts";
-// import { msg as kernelInfoMsg } from "./testdata/kernel_info.packet.ts";
+import { Comm, CommContext } from "./comm.ts";
+import { Kernel } from "../kernel.ts";
+import { msg as kernelInfoMsg } from "./testdata/kernel_info_request.packet.ts";
 
-// Deno.test("shell kernel info", () => {
-//     const k = new Kernel({ connectionFile: "../testdata/connfile.json" });
-//     const cc = new ShellComm("127.0.0.1", 1234, k);
-//     cc.recv(kernelInfoMsg);
-// });
+Deno.test("message parsing", async () => {
+    const connFile = await Kernel.parseConnectionFile("./src/testdata/connfile.json");
 
-// Deno.test("comm shutdown", () => {
-//     const k = new Kernel({ connectionFile: "../testdata/connfile.json" });
-//     const cc = new ControlComm("127.0.0.1", 1234, k);
-//     cc.recv(shutdownMsg);
-// });
+    const c = new Comm({
+        name: "test",
+        hostname: "127.0.0.1",
+        port: 0,
+        sessionId: "bob",
+        hmacKey: {
+            alg: "sha256",
+            key: connFile.key
+        },
+        handler: recvCb,
+        type: "router"
+    });
+
+    await c.recv(kernelInfoMsg);
+
+    // deno-lint-ignore require-await
+    async function recvCb(ctx: CommContext) {
+        console.log("received msg", ctx.msg);
+    }
+});

@@ -180,11 +180,11 @@ export class Message {
         return ret;
     }
 
-    public serialize(hmacKey: HmacKey): Array<Uint8Array> {
+    public async serialize(hmacKey: HmacKey): Promise<Uint8Array[]> {
         // format data
         const messages: Array<Uint8Array> = [];
         messages.push(stringToAb("<IDS|MSG>"));
-        const hmac = this.calcHmac(hmacKey);
+        const hmac = await this.calcHmac(hmacKey);
         // console.log("calculated HMAC:", hmac);
         // console.log("calculated HMAC buf:", stringToAb(hmac).toString());
         messages.push(stringToAb(hmac));
@@ -198,20 +198,41 @@ export class Message {
 
         Comm.printMessages("==> SENDING DATA", messages, this);
 
-        return messages;
+        return (messages as Uint8Array[]);
     }
 
-    public calcHmac(hmacKey: HmacKey): string {
+    public async calcHmac(hmacKey: HmacKey): Promise<string> {
         const headerStr = JSON.stringify(this.header);
         const parentHeaderStr = JSON.stringify(this.parentHeader);
         const metadataStr = JSON.stringify(this.metadata);
         const contentStr = JSON.stringify(this.content);
 
-        return (hmac(hmacKey.alg, hmacKey.key, `${headerStr}${parentHeaderStr}${metadataStr}${contentStr}`, "utf8", "hex") as string);
+        const hmacData = `${headerStr}${parentHeaderStr}${metadataStr}${contentStr}`;
+        const ret1 = (hmac(hmacKey.alg, hmacKey.key, hmacData, "utf8", "hex") as string);
+        const keyBuf = new TextEncoder().encode(hmacKey.key);
+        console.log("++++ LIB HMAC", ret1);
+
+        // TODO: replace hmacKey with this key
+        const key = await window.crypto.subtle.importKey(
+            "raw",
+            keyBuf,
+            { name: "HMAC", hash: { name: "SHA-256" } },
+            true,
+            ["sign", "verify"]
+        );
+        const sig = await window.crypto.subtle.sign(
+            "HMAC",
+            key,
+            new TextEncoder().encode(hmacData)
+        );
+        const b = new Uint8Array(sig);
+        const ret2 = Array.prototype.map.call(b, x => ('00' + x.toString(16)).slice(-2)).join("");
+        console.log("++++ WEBCRYPTO HMAC", ret2);
+
+        return ret2;
     }
 
-    public static from(data: Array<Uint8Array>, hmacKey: HmacKey): Message {
-        data.forEach((d) => console.log("received data", d.toString()));
+    public static async from(data: Array<Uint8Array>, hmacKey: HmacKey): Promise<Message> {
         const delimiter = abToString(data[0]);
         const hmacSig = abToString(data[1]);
         const header = JSON.parse(abToString(data[2]));
@@ -235,7 +256,12 @@ export class Message {
         m.content = content;
         // TODO: buffers
 
-        if (m.calcHmac(hmacKey) !== hmacSig) throw new Error("HMAC was invalid on received packet");
+        const hmac = await m.calcHmac(hmacKey);
+        console.debug("Calculated HMAC", hmac);
+        if (hmac !== hmacSig) {
+            console.debug("Received HMAC", hmacSig);
+            throw new Error("HMAC was invalid on received packet");
+        }
 
         return m;
     }

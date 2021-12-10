@@ -24,7 +24,7 @@ export interface CommCfg {
     sessionId: string;
     hmacKey: HmacKey;
     handler: HandlerFn;
-    type?: "pub" | "router" | "reply";
+    type?: "pub" | "router" | "reply" | "test";
 }
 
 export class Comm {
@@ -54,9 +54,6 @@ export class Comm {
             case "pub":
                 this.socket = zmq.Publish();
                 break;
-            // case "reply":
-            //     this.socket = zmq.Reply();
-            //     break;
             default:
                 throw new Error(`unknown zmq socket type: ${this.type}`);
         }
@@ -77,9 +74,6 @@ export class Comm {
             case "pub":
                 await this.pubInit(connStr);
                 break;
-            // case "reply":
-            //     await this.replyInit(connStr);
-            //     break;
         }
     }
 
@@ -115,14 +109,16 @@ export class Comm {
     //     await socket.connect(connStr);
     // }
 
-    public send(msg: Message): Promise<void> {
-        const data: Array<zmq.MessageLike> = msg.serialize(this.hmacKey);
+    public async send(msg: Message): Promise<void> {
+        const data: Array<zmq.MessageLike> = await msg.serialize(this.hmacKey);
+
+        Comm.printMessages(`==> SENDING DATA: ${msg.type}`, (data as Array<Uint8Array>), msg);
 
         return this.socket.send(...data);
     }
 
     public async recv(data: Array<Uint8Array>) {
-        const msg = Message.from(data, this.hmacKey);
+        const msg = await Message.from(data, this.hmacKey);
         Comm.printMessages(`<== RECEIVED DATA: ${msg.type}`, data, msg);
 
         const ctx: CommContext = {
@@ -220,7 +216,7 @@ export class IOPubComm extends Comm {
     }
 
     public async send(msg: Message): Promise<void> {
-        const data: Array<zmq.MessageLike> = msg.serialize(this.hmacKey);
+        const data: Array<zmq.MessageLike> = await msg.serialize(this.hmacKey);
 
         // XXX: first data frame is a empty string, representing our topic
         // our zeromq library automatically filters frames that don't match a known topic
