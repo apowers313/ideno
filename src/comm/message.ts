@@ -208,8 +208,13 @@ export class Message {
         const contentStr = JSON.stringify(this.content);
 
         const hmacData = `${headerStr}${parentHeaderStr}${metadataStr}${contentStr}`;
+        console.log(`HMAC data: '${hmacData}'`);
         const ret1 = (hmac(hmacKey.alg, hmacKey.key, hmacData, "utf8", "hex") as string);
         const keyBuf = new TextEncoder().encode(hmacKey.key);
+        const hmacBuf = new TextEncoder().encode(hmacData);
+        console.log("hmacBuf", hmacBuf.toString());
+        console.log("hmacData size", hmacData.length);
+        console.log("hmacBuf size", hmacBuf.buffer.byteLength);
         console.log("++++ LIB HMAC", ret1);
 
         // TODO: replace hmacKey with this key
@@ -223,7 +228,7 @@ export class Message {
         const sig = await window.crypto.subtle.sign(
             "HMAC",
             key,
-            new TextEncoder().encode(hmacData)
+            hmacBuf
         );
         const b = new Uint8Array(sig);
         const ret2 = Array.prototype.map.call(b, x => ('00' + x.toString(16)).slice(-2)).join("");

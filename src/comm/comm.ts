@@ -98,16 +98,13 @@ export class Comm {
                 if (!(m instanceof Uint8Array)) {
                     throw new Error("expected to receive an array of Uint8Array");
                 }
+
+                console.debug(`ZMQ router '${this.name}' received data: ${m.toString()}`);
             });
 
             await this.recv((messages as Uint8Array[]));
         }
     }
-
-    // private async replyInit(connStr: string) {
-    //     const socket = (this.socket as zmq.Replier);
-    //     await socket.connect(connStr);
-    // }
 
     public async send(msg: Message): Promise<void> {
         const data: Array<zmq.MessageLike> = await msg.serialize(this.hmacKey);
