@@ -1,5 +1,3 @@
-import { hmac } from "../../deps.ts";
-
 import { Comm, CommContext, HmacKey } from "./comm.ts";
 import { desc } from "../types.ts";
 
@@ -209,13 +207,11 @@ export class Message {
 
         const hmacData = `${headerStr}${parentHeaderStr}${metadataStr}${contentStr}`;
         console.log(`HMAC data: '${hmacData}'`);
-        const ret1 = (hmac(hmacKey.alg, hmacKey.key, hmacData, "utf8", "hex") as string);
         const keyBuf = new TextEncoder().encode(hmacKey.key);
         const hmacBuf = new TextEncoder().encode(hmacData);
         console.log("hmacBuf", hmacBuf.toString());
         console.log("hmacData size", hmacData.length);
         console.log("hmacBuf size", hmacBuf.buffer.byteLength);
-        console.log("++++ LIB HMAC", ret1);
 
         // TODO: replace hmacKey with this key
         const key = await window.crypto.subtle.importKey(
@@ -237,9 +233,46 @@ export class Message {
         return ret2;
     }
 
+    public static async hmacSign() {
+
+    }
+
+    public static async hmacVerify(expectedSig: Uint8Array, hmacKey: HmacKey, headerBuf: Uint8Array, parentHeaderBuf: Uint8Array, metadataBuf: Uint8Array, contentBuf: Uint8Array) {
+        const keyBuf = new TextEncoder().encode(hmacKey.key);
+
+        const hmacBuf = Uint8Array.from([
+            ...headerBuf,
+            ...parentHeaderBuf,
+            ...metadataBuf,
+            ...contentBuf,
+        ]);
+
+        const cryptoKey = await window.crypto.subtle.importKey(
+            "raw",
+            keyBuf,
+            { name: "HMAC", hash: { name: "SHA-256" } },
+            true,
+            ["sign", "verify"]
+        );
+
+        const decodedSig = hexStringToArrayBuffer(new TextDecoder().decode(expectedSig));
+        const valid = await window.crypto.subtle.verify(
+            "HMAC",
+            cryptoKey,
+            decodedSig,
+            hmacBuf
+        );
+
+        if (!valid) {
+            throw new Error("HMAC was invalid on received packet");
+        }
+    }
+
     public static async from(data: Array<Uint8Array>, hmacKey: HmacKey): Promise<Message> {
+        await this.hmacVerify(data[1], hmacKey, data[2], data[3], data[4], data[5]);
+
         const delimiter = abToString(data[0]);
-        const hmacSig = abToString(data[1]);
+        // const hmacSig = abToString(data[1]);
         const header = JSON.parse(abToString(data[2]));
         const parentHeader = JSON.parse(abToString(data[3]));
         const metadata = JSON.parse(abToString(data[4]));
@@ -255,18 +288,11 @@ export class Message {
         });
 
         m.delimiter = delimiter;
+        // m.hmacSig = hmacSig;
         m.header = header;
         m.parentHeader = parentHeader;
         m.metadata = metadata;
         m.content = content;
-        // TODO: buffers
-
-        const hmac = await m.calcHmac(hmacKey);
-        console.debug("Calculated HMAC", hmac);
-        if (hmac !== hmacSig) {
-            console.debug("Received HMAC", hmacSig);
-            throw new Error("HMAC was invalid on received packet");
-        }
 
         return m;
     }
@@ -367,4 +393,42 @@ function abToString(buf: Uint8Array | string): string {
 
 function stringToAb(str: string): Uint8Array {
     return new TextEncoder().encode(str);
+}
+
+function buf2hex(buffer: ArrayBuffer): string { // buffer is an ArrayBuffer
+    return [...new Uint8Array(buffer)]
+        .map(x => x.toString(16).padStart(2, '0'))
+        .join('');
+}
+
+function hexStringToArrayBuffer(hexString: string) {
+    // remove the leading 0x
+    hexString = hexString.replace(/^0x/, '');
+
+    // ensure even number of characters
+    if (hexString.length % 2 != 0) {
+        console.log('WARNING: expecting an even number of characters in the hexString');
+    }
+
+    // check for some non-hex characters
+    const bad = hexString.match(/[G-Z\s]/i);
+    if (bad) {
+        console.log('WARNING: found non-hex characters', bad);
+    }
+
+    // split the string into pairs of octets
+    const pairs = hexString.match(/[\dA-F]{2}/gi);
+    if (!pairs) {
+        throw new Error("malformatted HMAC string");
+    }
+
+    // convert the octets to integers
+    const integers = pairs.map(function (s) {
+        return parseInt(s, 16);
+    });
+
+    const array = new Uint8Array(integers);
+    console.log(array);
+
+    return array.buffer;
 }
