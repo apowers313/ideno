@@ -33,7 +33,7 @@ const ijavascriptMsg: Array<Uint8Array> = [
     Uint8Array.from([0x7b, 0x7d]),
     Uint8Array.from([0x7b, 0x7d]),
 ];
-// JMP: expectedSignature ae0082fc60af1a1ce8e5738fbb629355a790c249c8522260383ef7841a07379e
+// JMP: expectedSignature ae0082fc60af1a1ce8e5738fbb629355a790c249c8522260383ef7841a07379e;
 // JMP: obtainedSignature ae0082fc60af1a1ce8e5738fbb629355a790c249c8522260383ef7841a07379e
 
 Deno.test("message parsing", async () => {
