@@ -181,15 +181,19 @@ export class Message {
     public async serialize(hmacKey: HmacKey): Promise<Uint8Array[]> {
         // format data
         const messages: Array<Uint8Array> = [];
+        const header = JSON.stringify(this.header);
+        const parentHeader = JSON.stringify(this.parentHeader);
+        const metadata = JSON.stringify(this.metadata);
+        const content = JSON.stringify(this.content);
+        const hmac = await this.hmacSign(hmacKey, header, parentHeader, metadata, content);
+
         messages.push(stringToAb("<IDS|MSG>"));
-        const hmac = await this.calcHmac(hmacKey);
-        // console.log("calculated HMAC:", hmac);
-        // console.log("calculated HMAC buf:", stringToAb(hmac).toString());
         messages.push(stringToAb(hmac));
-        messages.push(stringToAb(JSON.stringify(this.header)));
-        messages.push(stringToAb(JSON.stringify(this.parentHeader)));
-        messages.push(stringToAb(JSON.stringify(this.metadata)));
-        messages.push(stringToAb(JSON.stringify(this.content)));
+        messages.push(stringToAb(header));
+        messages.push(stringToAb(parentHeader));
+        messages.push(stringToAb(metadata));
+        messages.push(stringToAb(content));
+
         if (this.buffers) {
             console.error("Jupyter message buffers not currently supported");
         }
@@ -199,47 +203,18 @@ export class Message {
         return (messages as Uint8Array[]);
     }
 
-    public async calcHmac(hmacKey: HmacKey): Promise<string> {
-        const headerStr = JSON.stringify(this.header);
-        const parentHeaderStr = JSON.stringify(this.parentHeader);
-        const metadataStr = JSON.stringify(this.metadata);
-        const contentStr = JSON.stringify(this.content);
-
-        const hmacData = `${headerStr}${parentHeaderStr}${metadataStr}${contentStr}`;
-        console.log(`HMAC data: '${hmacData}'`);
-        const keyBuf = new TextEncoder().encode(hmacKey.key);
+    public async hmacSign(hmacKey: HmacKey, header: string, parentHeader: string, metadata: string, content: string): Promise<string> {
+        const hmacData = `${header}${parentHeader}${metadata}${content}`;
         const hmacBuf = new TextEncoder().encode(hmacData);
-        console.log("hmacBuf", hmacBuf.toString());
-        console.log("hmacData size", hmacData.length);
-        console.log("hmacBuf size", hmacBuf.buffer.byteLength);
 
-        // TODO: replace hmacKey with this key
-        const key = await window.crypto.subtle.importKey(
-            "raw",
-            keyBuf,
-            { name: "HMAC", hash: { name: "SHA-256" } },
-            true,
-            ["sign", "verify"]
-        );
-        const sig = await window.crypto.subtle.sign(
-            "HMAC",
-            key,
-            hmacBuf
-        );
-        const b = new Uint8Array(sig);
-        const ret2 = Array.prototype.map.call(b, x => ('00' + x.toString(16)).slice(-2)).join("");
+        const sig = await window.crypto.subtle.sign("HMAC", hmacKey, hmacBuf);
+        const ret2 = buf2hex(sig);
         console.log("++++ WEBCRYPTO HMAC", ret2);
 
         return ret2;
     }
 
-    public static async hmacSign() {
-
-    }
-
     public static async hmacVerify(expectedSig: Uint8Array, hmacKey: HmacKey, headerBuf: Uint8Array, parentHeaderBuf: Uint8Array, metadataBuf: Uint8Array, contentBuf: Uint8Array) {
-        const keyBuf = new TextEncoder().encode(hmacKey.key);
-
         const hmacBuf = Uint8Array.from([
             ...headerBuf,
             ...parentHeaderBuf,
@@ -247,18 +222,10 @@ export class Message {
             ...contentBuf,
         ]);
 
-        const cryptoKey = await window.crypto.subtle.importKey(
-            "raw",
-            keyBuf,
-            { name: "HMAC", hash: { name: "SHA-256" } },
-            true,
-            ["sign", "verify"]
-        );
-
         const decodedSig = hexStringToArrayBuffer(new TextDecoder().decode(expectedSig));
         const valid = await window.crypto.subtle.verify(
             "HMAC",
-            cryptoKey,
+            hmacKey,
             decodedSig,
             hmacBuf
         );

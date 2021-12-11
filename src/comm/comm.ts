@@ -12,10 +12,7 @@ export interface CommContext {
     sessionId: string;
 }
 
-export interface HmacKey {
-    alg: "sha256",
-    key: string;
-}
+export type HmacKey = CryptoKey;
 
 export interface CommCfg {
     name: string;

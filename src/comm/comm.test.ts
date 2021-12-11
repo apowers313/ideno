@@ -38,17 +38,20 @@ const ijavascriptMsg: Array<Uint8Array> = [
 
 Deno.test("message parsing", async () => {
     // const connFile = await Kernel.parseConnectionFile("./src/testdata/connfile.json");
-    console.log("");
+    const hmacKey = await window.crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(connFile.key),
+        { name: "HMAC", hash: { name: "SHA-256" } },
+        true,
+        ["sign", "verify"]
+    );
 
     const c = new Comm({
         name: "test",
         hostname: "127.0.0.1",
         port: 0,
         sessionId: "bob",
-        hmacKey: {
-            alg: "sha256",
-            key: connFile.key
-        },
+        hmacKey,
         handler: recvCb,
         type: "router"
     });

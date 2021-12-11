@@ -103,10 +103,13 @@ export class Kernel {
         console.info("initializing IDeno kernel...");
 
         this.connectionSpec = await Kernel.parseConnectionFile(this.connectionFile);
-        this.hmacKey = {
-            key: this.connectionSpec.key,
-            alg: "sha256"
-        };
+        this.hmacKey = await window.crypto.subtle.importKey(
+            "raw",
+            new TextEncoder().encode(this.connectionSpec.key),
+            { name: "HMAC", hash: { name: "SHA-256" } },
+            true,
+            ["sign", "verify"]
+        );
 
         this.addComm(ShellComm, this.connectionSpec.shell_port, this.shellHandler.bind(this));
         this.addComm(ControlComm, this.connectionSpec.control_port, this.controlHandler.bind(this));
